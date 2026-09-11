@@ -53,9 +53,9 @@ method needsPolling(source: NimletTurnSource): bool = not source.active.isNil
 proc newNimletTurnSource*(active: Future[bool] = nil): NimletTurnSource =
   NimletTurnSource(id: "agent-turn", active: active)
 
-proc refreshFooter(controller: NimletController) =
-  controller.screen.footer = controller.screen.statusLine(
-    controller.agent[].statusFooter(controller.screen.statusWidth))
+proc refreshFooter(controller: NimletController,
+                   width = controller.screen.statusWidth) =
+  controller.screen.footer = controller.screen.statusLine(controller.agent[].statusFooter(width))
 
 proc drainCancelPipe(controller: NimletController) =
   if controller.cancelRead < 0: return
@@ -269,8 +269,7 @@ proc handleEvent*(controller: NimletController,
     controller.resetInteraction()
     return eventHandled
   if event.kind == uiResize:
-    controller.screen.footer = controller.screen.statusLine(
-      controller.agent[].statusFooter(max(0, event.width - 15)))
+    controller.refreshFooter(max(0, event.width - 15))
   if controller.screen.busy and event.kind == uiKey and event.key == keyCtrlC:
     controller.requestInterrupt()
     if not controller.questionFuture.isNil and
