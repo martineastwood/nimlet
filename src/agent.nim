@@ -140,8 +140,9 @@ proc statsReport(agent: Agent): string =
   result.add "\nLatest: " & formatUsageLabels(usage).join("  ")
   let window = agent.config.effectiveContextWindow
   if window > 0:
-    result.add "\nContext: " & $contextTokens(usage) & " / " & $window &
-      " (" & $min(100, contextTokens(usage) * 100 div window) & "%)"
+    let used = contextTokens(usage)
+    result.add "\nContext: " & $used & " / " & $window &
+      " (" & $min(100, used * 100 div window) & "%)"
   let cost = formatUsageCost(agent.config.provider,
     if storedModel.len > 0: storedModel else: model, usage)
   if cost.len > 0: result.add "\nLatest cost: " & cost
