@@ -132,6 +132,17 @@ discarding a queued message. Ctrl-U clears the composer and unqueues it.
 Pass a prompt on the command line for a one-shot turn that exits when
 done: `./nimlet fix the failing parser test`. Add `-i` /
 `--interactive` to run that prompt and then keep the REPL open.
+Use `-p` / `--print` for clean stdout containing only the final response.
+Piped stdin selects print mode automatically and is placed before an optional
+CLI instruction: `cat README.md | ./nimlet -p "Summarize this text"`.
+Use `--mode json` instead for versioned JSONL events. Every stdout line is one
+object with `"version":1`. Lifecycle types are `session_start`, `run_start`,
+`step_start`, `step_end`, `run_end`, and `session_end`; message types are
+`message`, `message_delta`, and `thinking_delta`; tool types are `tool_call`,
+`tool_output_delta`, `tool_result`, and `approval_required`. Errors and warnings
+use `error` and `diagnostic`. The reserved queue record has `type`, `action`,
+`content`, and `depth`; one-shot JSON mode does not itself create a queue.
+The complete version 1 contract is in [docs/json.md](docs/json.md).
 The interactive TUI is built with nimterm. Reads, searches, and workspace edits
 run without prompts. Shell commands and extension tools ask on first use; press
 `Enter` for once, `s` to allow the normalized command for the session, `p` to

@@ -3291,6 +3291,79 @@ echo '{"arguments":{"command":"echo from-hook"}}'
     check seen == "echo from-hook"
 
 suite "cli prompt args":
+  test "json mode emits versioned lifecycle, message, and tool events":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "input.txt", "contents")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    agent.provider = TestProvider(name: "test", responses: @[
+      ProviderResponse(model: "test/model", content: @[
+        toolUse("call-1", "read", %*{"path": "input.txt"})],
+        finishReason: frToolUse),
+      ProviderResponse(model: "test/model", content: @[text("done")],
+        finishReason: frEndTurn)])
+    var output: seq[JsonNode]
+    check agent.runJson("inspect", proc (event: JsonNode) = output.add event)
+    check output.mapIt(it["type"].getStr) == @[
+      "session_start", "message", "run_start", "step_start", "tool_call",
+      "tool_result", "step_end", "step_start", "message", "step_end",
+      "run_end", "session_end"]
+    for event in output:
+      check event["version"].getInt == jsonEventVersion
+    check output[1]["role"].getStr == "user"
+    check output[1]["content"].getStr == "inspect"
+    check output[4]["tool_id"].getStr == "call-1"
+    check "contents" in output[5]["output"].getStr
+    check output[8]["role"].getStr == "assistant"
+    check output[8]["content"].getStr == "done"
+    check output[^1]["success"].getBool
+    let queued = queueEventJson("session", "enqueue", "next", 1)
+    check queued == %*{"version": 1, "type": "queue",
+      "session_id": "session", "action": "enqueue", "depth": 1,
+      "content": "next"}
+
+  test "print mode emits only the final response":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    agent.provider = TestProvider(name: "test", responses: @[
+      ProviderResponse(model: "test/model", content: @[text("plain answer")],
+        usage: Usage(inputTokens: 3, outputTokens: 2), finishReason: frEndTurn)])
+    var output: seq[string]
+    var diagnostics: seq[string]
+    let captureOutput = proc (text: string) = output.add text
+    let captureDiagnostic = proc (text: string) = diagnostics.add text
+    check agent.runPrint("question", captureOutput, captureDiagnostic)
+    check output == @["plain answer"]
+    check diagnostics.len == 0
+
+  test "print mode is explicit or selected by piped stdin":
+    let long = parseCliArgs(["--print", "summarize"])
+    check long.print
+    check long.prompt == "summarize"
+    let short = parseCliArgs(["-p", "review"])
+    check short.print
+    check short.printMode(true)
+    check parseCliArgs(["review"]).printMode(false)
+    check not parseCliArgs(["review"]).printMode(true)
+    let json = parseCliArgs(["--mode", "json", "inspect"])
+    check json.mode == "json"
+    check json.prompt == "inspect"
+    check json.printMode(true)
+    check parseCliArgs(["--mode", "rpc"]).error.len > 0
+
+  test "piped input is merged before the CLI instruction":
+    check mergePipedPrompt("", "  source text\n") == "source text"
+    check mergePipedPrompt("summarize", "source text\n") ==
+      "source text\n\nsummarize"
+    check mergePipedPrompt("summarize", " \n") == "summarize"
+
   test "prompt words are one-shot by default":
     let cli = parseCliArgs(["fix", "the", "parser"])
     check cli.error.len == 0

@@ -692,9 +692,13 @@ proc executeParallelReadOnly(agent: ptr Agent, call: ContentBlock,
 proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
   let runId = (if agent.session.id.len > 0: agent.session.id else: "session") &
     ":turn:" & $agent.session.events.len
+  let prompt = if agent.session.events.len > 0 and
+      agent.session.events[^1].kind == sekUser:
+    sessionMessageText(agent.session.events[^1].message)
+  else: ""
   var step = -1
   ui.emitAgentEvent(NimletEvent(kind: neRunStarted, runId: runId,
-    sessionId: agent.session.id, turnId: runId))
+    sessionId: agent.session.id, turnId: runId, prompt: prompt))
   await agent.fireTurnHooks(heTurnStart, ui)
   var overflowRetried = false
   var truncatedResponses = 0
