@@ -1,6 +1,8 @@
 ## bash tool — run a shell command in the workspace.
 
-import std/[asyncdispatch, json, os, osproc, posix, strformat, times]
+import std/[asyncdispatch, json, os, osproc, strformat, times]
+when not defined(linux):
+  import std/posix
 import tool, nimgent, ../childproc
 
 const

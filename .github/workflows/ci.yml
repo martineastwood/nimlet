@@ -21,7 +21,10 @@ jobs:
         run: git clone --depth 1 https://github.com/martineastwood/nimgent.git ../nimgent
 
       - name: Checkout nimterm (sibling)
-        run: git clone --depth 1 https://github.com/martineastwood/nimterm.git ../nimterm
+        run: |
+          git clone --depth 1 https://github.com/martineastwood/nimterm.git ../nimterm
+          git -C ../nimterm fetch --depth 1 origin 03a22778ff3142bf9e59cb3cdcc35ed7440135d0
+          git -C ../nimterm checkout --detach 03a22778ff3142bf9e59cb3cdcc35ed7440135d0
 
       - name: Install OpenSSL headers and PCRE (std/re needs libpcre at runtime)
         run: sudo apt-get update && sudo apt-get install -y libssl-dev libpcre3
