@@ -1,0 +1,11 @@
+nimlet
+nimterm_preview
+build/
+nimcache/
+tests/all_tests
+*.dSYM/
+.cursor/
+.nimlet/
+.nimble/
+SCOPE.md
+AGENTS.md

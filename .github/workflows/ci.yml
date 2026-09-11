@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nim-version: ["stable", "2.0.0"]
+    steps:
+      - uses: actions/checkout@v4
+
+      # nimlet's nim.cfg resolves the sibling packages via --path entries.
+      # actions/checkout refuses paths outside the workspace, so clone instead.
+      - name: Checkout nimgent (sibling)
+        run: git clone --depth 1 https://github.com/martineastwood/nimgent.git ../nimgent
+
+      - name: Checkout nimterm (sibling)
+        run: git clone --depth 1 https://github.com/martineastwood/nimterm.git ../nimterm
+
+      - name: Install OpenSSL headers and PCRE (std/re needs libpcre at runtime)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libpcre3
+
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: ${{ matrix.nim-version }}
+          use-nightlies: false
+
+      - name: Run tests
+        # Run from the checkout so nim.cfg keeps the sibling source paths.
+        run: nim c -r --hints:off tests/all_tests.nim

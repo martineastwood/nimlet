@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "includes": [],
+  "dependencies": [
+    "../nimterm",
+    "../nimgent"
+  ]
+}
