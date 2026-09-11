@@ -143,6 +143,9 @@ object with `"version":1`. Lifecycle types are `session_start`, `run_start`,
 use `error` and `diagnostic`. The reserved queue record has `type`, `action`,
 `content`, and `depth`; one-shot JSON mode does not itself create a queue.
 The complete version 1 contract is in [docs/json.md](docs/json.md).
+Use `--mode rpc` for a long-running JSONL process that accepts correlated
+`prompt`, `interrupt`, `get_state`, and `shutdown` commands on stdin. It runs one
+turn with one queued prompt; see [docs/rpc.md](docs/rpc.md).
 The interactive TUI is built with nimterm. Reads, searches, and workspace edits
 run without prompts. Shell commands and extension tools ask on first use; press
 `Enter` for once, `s` to allow the normalized command for the session, `p` to

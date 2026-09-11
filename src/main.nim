@@ -1,6 +1,6 @@
 import std/[asyncdispatch, json, os, strutils, terminal]
 import nimgent
-import config, agent, session, models_dev, hooks, events
+import config, agent, session, models_dev, hooks, events, rpc
 import ui/[console, nimterm_preview, turn]
 import nimterm/theme
 
@@ -44,8 +44,8 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
         result.error = "Usage: nimlet --mode json"
         return
       result.mode = args[i + 1].toLowerAscii
-      if result.mode != "json":
-        result.error = "Unknown mode: " & args[i + 1] & " (use json)"
+      if result.mode notin ["json", "rpc"]:
+        result.error = "Unknown mode: " & args[i + 1] & " (use json|rpc)"
         return
       inc i
     of "--resume":
@@ -198,6 +198,7 @@ proc runMain*() =
     printHelp()
     echo "  --print,-p       print only the response and exit"
     echo "  --mode json      emit versioned JSONL events and exit"
+    echo "  --mode rpc       serve JSONL commands until shutdown or EOF"
     echo "  --session ID     resume a session at startup"
     echo "  --resume         resume the latest session, if any"
     echo "  --yolo           auto-approve tools for this process"
@@ -209,9 +210,13 @@ proc runMain*() =
     quit(2)
 
   let stdinIsTty = stdin.isatty
-  let isPrintMode = cli.printMode(stdinIsTty)
-  let prompt = if stdinIsTty: cli.prompt
+  let isRpcMode = cli.mode == "rpc"
+  let isPrintMode = not isRpcMode and cli.printMode(stdinIsTty)
+  let prompt = if isRpcMode or stdinIsTty: cli.prompt
                else: mergePipedPrompt(cli.prompt, stdin.readAll())
+  if isRpcMode and prompt.len > 0:
+    stderr.writeLine "RPC mode accepts commands on stdin, not a CLI prompt."
+    quit(2)
   if isPrintMode and prompt.len == 0:
     stderr.writeLine "Non-interactive mode requires a prompt or piped stdin."
     quit(2)
@@ -224,7 +229,7 @@ proc runMain*() =
     let sessions = listSessions(config.sessionDir, config.workspace, limit = 1)
     if sessions.len > 0:
       sessionId = sessions[0].id
-  let catalogNote = catalogStartupNote(isPrintMode)
+  let catalogNote = catalogStartupNote(isPrintMode or isRpcMode)
   var agent: Agent
   try:
     agent = initAgent(config, sessionId)
@@ -236,6 +241,10 @@ proc runMain*() =
   agent.yolo = cli.yolo
 
   waitFor (addr agent).fireSessionHooks(heSessionStart)
+
+  if isRpcMode:
+    runRpc(agent)
+    return
 
   if cli.mode == "json":
     if not runJson(agent, prompt): quit(1)

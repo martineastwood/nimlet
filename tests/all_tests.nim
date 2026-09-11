@@ -34,6 +34,7 @@ import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_t
 import ../src/extensions
 import ../src/hooks
 import ../src/main
+import ../src/rpc
 
 proc freshDir(): string
 
@@ -187,6 +188,66 @@ method generateAsync(provider: TestProvider,
                      request: ProviderRequest): Future[ProviderResponse] {.async.} =
   result = provider.responses[min(provider.callCount, provider.responses.high)]
   inc provider.callCount
+
+suite "rpc mode":
+  test "commands are correlated and one prompt can queue":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    agent.provider = TestProvider(name: "test", responses: @[
+      ProviderResponse(model: "test/model", content: @[text("first")],
+        finishReason: frEndTurn),
+      ProviderResponse(model: "test/model", content: @[text("second")],
+        finishReason: frEndTurn)])
+    var output: seq[JsonNode]
+    let runtime = newRpcRuntime(addr agent,
+      proc (event: JsonNode) = output.add event)
+    defer: runtime.close()
+
+    runtime.handleRpcLine("""{"id":"one","type":"prompt","message":"A"}""")
+    runtime.handleRpcLine("""{"id":"two","type":"prompt","message":"B"}""")
+    let responses = output.filterIt(it.getOrDefault("type").getStr == "response")
+    let queue = output.filterIt(it.getOrDefault("type").getStr == "queue")
+    check responses[0]["id"].getStr == "one"
+    check responses[0]["state"].getStr == "started"
+    check responses[1]["id"].getStr == "two"
+    check responses[1]["state"].getStr == "queued"
+    check queue[0]["request_id"].getStr == "two"
+
+    for _ in 0 .. 30:
+      pumpAsyncDispatcher()
+      discard runtime.pollRpc()
+    runtime.handleRpcLine("""{"id":"state","type":"get_state"}""")
+    check output[^1]["id"].getStr == "state"
+    check not output[^1]["busy"].getBool
+    check not output[^1]["queued"].getBool
+    check output.filterIt(it.getOrDefault("type").getStr == "message" and
+      it.getOrDefault("role").getStr == "assistant").mapIt(
+        it["content"].getStr) == @["first", "second"]
+
+  test "invalid commands and shutdown return JSON responses":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    var output: seq[JsonNode]
+    let runtime = newRpcRuntime(addr agent,
+      proc (event: JsonNode) = output.add event)
+    defer: runtime.close()
+
+    runtime.handleRpcLine("not json")
+    runtime.handleRpcLine("""{"id":"bad","type":"wat"}""")
+    runtime.handleRpcLine("""{"id":"bye","type":"shutdown"}""")
+    check not output[0]["ok"].getBool
+    check output[1]["id"].getStr == "bad"
+    check not output[1]["ok"].getBool
+    check output[2]["id"].getStr == "bye"
+    check output[2]["state"].getStr == "stopped"
+    check not runtime.pollRpc()
 
 suite "black-box terminal integration":
   test "enter submits after mouse focus moves through the transcript and composer":
@@ -3356,7 +3417,10 @@ suite "cli prompt args":
     check json.mode == "json"
     check json.prompt == "inspect"
     check json.printMode(true)
-    check parseCliArgs(["--mode", "rpc"]).error.len > 0
+    let rpc = parseCliArgs(["--mode", "rpc"])
+    check rpc.error.len == 0
+    check rpc.mode == "rpc"
+    check parseCliArgs(["--mode", "unknown"]).error.len > 0
 
   test "piped input is merged before the CLI instruction":
     check mergePipedPrompt("", "  source text\n") == "source text"
