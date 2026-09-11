@@ -14,11 +14,13 @@ import ../src/ui/diff
 import ../src/ui/turn
 import ../src/ui/nimterm_adapter
 import ../src/ui/nimterm_preview
+import ../src/ui/nimterm_screen
 import nimterm/input
 import nimterm/keys
 import nimterm/theme
 import nimterm/events
 import nimterm/widgets/question
+import nimterm/widgets/transcript
 import ../src/models_dev
 import ../src/compaction
 import ../src/permissions
@@ -282,6 +284,27 @@ suite "black-box terminal integration":
     check not controller.busy
     check agent.session.events[^2].toolOutput == "Act"
     check "selected" in backend.frame.plainText
+
+  test "transcript scrolls while a question is awaiting an answer":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    for i in 0 ..< 40:
+      screen.transcript.appendUser("message " & $i)
+    screen.questionWidget = newQuestion("Choose", @[
+      QuestionOption(label: "Plan"), QuestionOption(label: "Act")])
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    var app = termapp.newApp(backend, screen)
+    app.render()
+    let atTail = screen.transcript.viewport.offset
+    app.dispatch(UiEvent(kind: uiKey, key: keyPageUp))
+    check screen.transcript.viewport.offset < atTail
+    let aboveOptions = screen.transcript.viewport.offset
+    app.dispatch(UiEvent(kind: uiKey, key: keyPageDown))
+    check screen.transcript.viewport.offset > aboveOptions
 
   test "keyboard approval resumes a tool turn":
     let root = freshDir()
