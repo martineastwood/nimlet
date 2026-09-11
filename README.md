@@ -31,6 +31,7 @@ workspace and overlays `~/.nimlet/config.json`. Global files live in
 - `~/.nimlet/config.json` — default provider and model
 - `~/.nimlet/AGENTS.md` — personal instructions (all projects)
 - `~/.nimlet/skills/` — global skills
+- `~/.nimlet/prompts/` — global prompt templates
 - `~/.nimlet/tools/` — global external tools
 - `~/.nimlet/hooks/` — global lifecycle hooks
 - `~/.nimlet/sessions/` — saved sessions
@@ -157,6 +158,7 @@ Use `/session` to print the current session ID and `/resume` to list or
 resume sessions. `/resume` lists this workspace (newest 20), with recency
 and the first user message; `/resume ID` restores that transcript and
 the last provider and requested model used, without changing your saved defaults.
+Use `/copy` to copy the latest assistant response to the clipboard.
 Older sessions without provider metadata retain the currently selected provider.
 A session from another project still loads by ID,
 with a warning. Sessions without a workspace header are hidden from
@@ -206,9 +208,16 @@ Project instructions are loaded from `~/.nimlet/AGENTS.md`, then from
 skills can be placed in `.nimlet/skills/<name>/SKILL.md`,
 `.agent/skills/<name>/SKILL.md`, or `~/.nimlet/skills/<name>/SKILL.md`;
 their metadata is advertised to the model and full bodies are loaded
-only through the `read_skill` tool. Type `/<skill>` (optionally followed by
+only through the `read_skill` tool. Type `/skill:<name>` (optionally followed by
 a request) to load a skill into the next turn. Built-in commands win when
 names collide.
+
+Prompt templates are non-recursive Markdown files in `prompts/` under the same
+three roots. The filename becomes a bare slash command: `prompts/review.md`
+registers `/review`. Optional frontmatter may set `description`; `$ARGUMENTS`
+and `$@` in the body expand to the text following the command. Built-in commands
+win when names collide. Use prompt templates for short reusable requests and
+skills for model-visible procedures that may include supporting files.
 
 External tools are discovered the same way under `tools/` instead of
 `skills/`: `~/.nimlet/tools/`, `<workspace>/.agent/tools/`, then

@@ -1504,6 +1504,9 @@ suite "slash commands":
     check "/provider hyper" in commandSuggestions("/provider ")
     check "/provider hyper" in commandSuggestions("/provider hy")
     check "/provider google" in commandSuggestions("/provider go")
+    check "/copy" in commandSuggestions("/co")
+    check parseSlash("/copy").kind == slCopy
+    check "takes no arguments" in commandError("/copy extra")
     check parseSlash("/help").kind == slHelp
     check parseSlash("/provider").kind == slProvider
     check parseSlash("/provider").arg.len == 0
@@ -1553,6 +1556,26 @@ suite "slash commands":
     check parseSlash("/web on").arg == "on"
     check parseSlash("/web off").arg == "off"
     check "Invalid /web value" in commandError("/web maybe")
+
+  test "copy sends the latest assistant text to the interface":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    agent.session.addAssistantResponse(ProviderResponse(
+      content: @[text("older")]))
+    agent.session.addUserMessage("next")
+    agent.session.addAssistantResponse(ProviderResponse(
+      content: @[text("latest"), toolUse("call", "read", %*{})]))
+    var copied = ""
+    var notices: seq[string]
+    var ui = consoleSink()
+    ui.copyText = proc (text: string) = copied = text
+    ui.emit = proc (level: MsgLevel, text: string) = notices.add text
+    check agent.processInput("/copy", ui)
+    check copied == "latest"
+    check notices == @["Copied latest assistant response."]
 
   test "model picker recents then substring search":
     let root = freshDir()
@@ -1675,17 +1698,29 @@ suite "slash commands":
     createDir(root / ".nimlet" / "skills" / "review")
     writeFile(root / ".nimlet" / "skills" / "review" / "SKILL.md",
       "---\nname: review\ndescription: Structured review.\n---\n\nBe thorough.\n")
-    check "/review" in commandSuggestions("/re", root)
-    check parseSlash("/review", root).kind == slSkill
-    check parseSlash("/review", root).skillName == "review"
-    check commandError("/review", root) == ""
-    check commandError("/review the diff", root) == ""
-    check "Unknown command" in commandError("/review", root / "empty")
-    let expanded = expandSkill(root, parseSlash("/review src/foo.nim", root))
+    check "/skill:review" in commandSuggestions("/skill:r", root)
+    check parseSlash("/skill:review", root).kind == slSkill
+    check parseSlash("/skill:review", root).skillName == "review"
+    check commandError("/skill:review", root) == ""
+    check commandError("/skill:review the diff", root) == ""
+    check "Unknown command" in commandError("/skill:review", root / "empty")
+    let expanded = expandSkill(root, parseSlash("/skill:review src/foo.nim", root))
     check "Follow the \"review\" skill." in expanded
     check "Be thorough." in expanded
     check "src/foo.nim" in expanded
-    check commandSuggestionDescription("/review", root) == "Structured review."
+    check commandSuggestionDescription("/skill:review", root) == "Structured review."
+
+  test "prompt templates expand as bare slash commands":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "prompts")
+    writeFile(root / ".nimlet" / "prompts" / "review.md",
+      "---\ndescription: Review a target.\n---\nReview $ARGUMENTS carefully.\n")
+    check "/review" in commandSuggestions("/re", root)
+    let cmd = parseSlash("/review src/foo.nim", root)
+    check cmd.kind == slPrompt
+    check expandPrompt(root, cmd) == "Review src/foo.nim carefully."
+    check commandSuggestionDescription("/review", root) == "Review a target."
 
   test "malformed commands remain visible to validation":
     check parseSlash("/model refresh").kind == slError

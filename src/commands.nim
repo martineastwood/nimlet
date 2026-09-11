@@ -7,6 +7,7 @@ import std/[os, strutils]
 import config
 import session
 import skills
+import prompts
 import models_dev
 import workspace
 import images
@@ -18,6 +19,7 @@ type
     slNone            ## ordinary text, or an in-progress composer prefix
     slError
     slSkill
+    slPrompt
     slHelp
     slPlan
     slAct
@@ -35,6 +37,7 @@ type
     slPermissions
     slResume
     slFork
+    slCopy
     slReload
     slName
     slTheme
@@ -45,6 +48,7 @@ type
     arg*: string          ## thinking level, resume id, compact instruction, skill rest
     error*: string
     skillName*: string
+    promptName*: string
 
   CommandSpec* = object
     kind*: SlashKind
@@ -92,8 +96,10 @@ const CommandSpecs* = [
     description: "list this project's sessions, or resume one"),
   CommandSpec(kind: slFork, name: "/fork", usage: "/fork [message]",
     description: "fork from a user message and continue in a new session"),
+  CommandSpec(kind: slCopy, name: "/copy", usage: "/copy",
+    description: "copy the latest assistant response"),
   CommandSpec(kind: slReload, name: "/reload", usage: "/reload",
-    description: "rescan tools, extensions, and hooks"),
+    description: "rescan tools, hooks, skills, and prompts"),
   CommandSpec(kind: slName, name: "/name", usage: "/name [title]",
     description: "show or set the session name"),
   CommandSpec(kind: slTheme, name: "/theme", usage: "/theme [name]",
@@ -115,7 +121,7 @@ proc helpText*(): string =
   const groupKinds: array[6, seq[SlashKind]] = [
     @[slPlan, slAct, slHelp],
     @[slModel, slModelsRefresh, slThinking, slProvider, slWeb],
-    @[slSession, slStats, slNew, slResume, slFork, slName, slCompact],
+    @[slSession, slStats, slNew, slResume, slFork, slCopy, slName, slCompact],
     @[slYolo, slPermissions],
     @[slTheme],
     @[slDoctor, slReload, slQuit],
@@ -168,15 +174,23 @@ proc commandParts(input: string): seq[string] =
   input.strip.splitWhitespace
 
 proc namedSkill(workspace, token: string): string =
-  ## Canonical skill name if `token` is `/name` and not a builtin.
-  if not token.startsWith("/") or token.len < 2 or isBuiltinSlash(token):
+  ## Skills are namespaced because bare slash names belong to prompt templates.
+  const prefix = "/skill:"
+  if not token.startsWith(prefix) or token.len == prefix.len:
     return ""
-  let name = token[1 .. ^1]
+  let name = token[prefix.len .. ^1]
   if " " in name or '/' in name:
     return ""
   for skill in discoverSkills(workspace):
     if skill.name.toLowerAscii == name.toLowerAscii:
       return skill.name
+
+proc namedPrompt(workspace, token: string): string =
+  if not token.startsWith("/") or token.len < 2 or isBuiltinSlash(token): return ""
+  let name = token[1 .. ^1]
+  if " " in name or '/' in name: return ""
+  let loaded = loadPrompt(workspace, name)
+  if loaded.ok: loaded.prompt.name else: ""
 
 proc restAfterCommand(input, command: string): string =
   let stripped = input.strip
@@ -202,6 +216,9 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
     SlashCommand(kind: slError, error: msg)
 
   if not matched.found:
+    let prompt = namedPrompt(workspace, command)
+    if prompt.len > 0:
+      return SlashCommand(kind: slPrompt, promptName: prompt, arg: arg)
     let skill = namedSkill(workspace, command)
     if skill.len > 0:
       return SlashCommand(kind: slSkill, skillName: skill, arg: arg)
@@ -213,7 +230,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   of slDoctor:
     if parts.len > 2 or (parts.len == 2 and parts[1] != "test"):
       return fail("Usage: /doctor [test]")
-  of slHelp, slPlan, slAct, slStats, slSession, slNew, slQuit, slReload:
+  of slHelp, slPlan, slAct, slStats, slSession, slNew, slCopy, slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
   of slProvider:
@@ -288,7 +305,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
       return fail("Usage: " & matched.spec.usage)
     if parts.len == 2:
       result.arg = parts[1].toLowerAscii
-  of slNone, slError, slSkill:
+  of slNone, slError, slSkill, slPrompt:
     return fail("Unknown command '" & command & "'; try /help")
 
 proc resumeOpensPicker*(input: string): bool =
@@ -314,6 +331,10 @@ proc expandSkill*(workspace: string, cmd: SlashCommand): string =
   result = "Follow the \"" & cmd.skillName & "\" skill.\n\n" & loaded.content
   if cmd.arg.len > 0:
     result.add "\n\n" & cmd.arg
+
+proc expandPrompt*(workspace: string, cmd: SlashCommand): string =
+  if cmd.kind == slPrompt:
+    result = prompts.expandPrompt(workspace, cmd.promptName, cmd.arg)
 
 const
   modelSearchMin = 2
@@ -536,9 +557,12 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
         result.add spec.usage
     for skill in discoverSkills(workspace):
       if skill.name.len == 0 or " " in skill.name: continue
-      let slash = "/" & skill.name
-      if isBuiltinSlash(slash): continue
+      let slash = "/skill:" & skill.name
       if slash.startsWith(command) and slash notin result:
+        result.add slash
+    for prompt in discoverPrompts(workspace):
+      let slash = "/" & prompt.name
+      if not isBuiltinSlash(slash) and slash.startsWith(command) and slash notin result:
         result.add slash
     return
   let m = mentionAt(input, cur)
@@ -582,6 +606,10 @@ proc commandSuggestionDescription*(suggestion: string,
       return spec.description
   if suggestion.startsWith("/") and suggestion.len > 1:
     let name = suggestion[1 .. ^1]
+    for prompt in discoverPrompts(workspace):
+      if prompt.name.toLowerAscii == name.toLowerAscii: return prompt.description
+    if not name.startsWith("skill:"): return
+    let skillName = name[6 .. ^1]
     for skill in discoverSkills(workspace):
-      if skill.name.toLowerAscii == name.toLowerAscii:
+      if skill.name.toLowerAscii == skillName.toLowerAscii:
         return skill.description

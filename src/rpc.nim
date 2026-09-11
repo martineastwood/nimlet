@@ -25,6 +25,15 @@ type
     step: int
     cancelRead, cancelWrite: cint
 
+var rpcSigint {.volatile.}: cint
+var rpcSignalWrite = -1.cint
+
+proc handleRpcSigint() {.noconv, raises: [], gcsafe.} =
+  rpcSigint = 1
+  if rpcSignalWrite >= 0:
+    var byte = '\1'
+    discard posix.write(rpcSignalWrite, byte.addr, 1)
+
 proc send(runtime: RpcRuntime, event: JsonNode) =
   if not runtime.writeEvent.isNil:
     runtime.writeEvent(event)
@@ -211,20 +220,31 @@ proc pollRpc*(runtime: RpcRuntime): bool =
 
 proc runRpc*(agent: var Agent) =
   let runtime = newRpcRuntime(addr agent)
-  defer: runtime.close()
+  defer:
+    rpcSignalWrite = -1
+    runtime.close()
+  rpcSigint = 0
+  rpcSignalWrite = runtime.cancelWrite
+  setControlCHook(handleRpcSigint)
   runtime.send sessionEventJson("session_start", agent.session.id)
-  discard fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK)
   var input = ""
   var eof = false
   while runtime.pollRpc():
-    var bytes: array[4096, char]
-    let count = posix.read(STDIN_FILENO, bytes.addr, bytes.len)
-    if count > 0:
-      for i in 0 ..< count: input.add bytes[i]
-    elif count == 0:
-      eof = true
-    elif osLastError().cint notin [EAGAIN, EWOULDBLOCK]:
-      eof = true
+    if rpcSigint != 0 and not runtime.shuttingDown:
+      runtime.shuttingDown = true
+      runtime.interrupted = true
+      if runtime.queuedPrompt.len > 0:
+        runtime.queuedPrompt = ""
+        runtime.queuedRequestId = ""
+        runtime.send queueEventJson(agent.session.id, "clear", "", 0)
+    var ready = TPollfd(fd: STDIN_FILENO, events: POLLIN)
+    if posix.poll(ready.addr, Tnfds(1), 0) > 0:
+      var bytes: array[4096, char]
+      let count = posix.read(STDIN_FILENO, bytes.addr, bytes.len)
+      if count > 0:
+        for i in 0 ..< count: input.add bytes[i]
+      else:
+        eof = true
     var newline = input.find('\n')
     while newline >= 0:
       let line = input[0 ..< newline].strip(chars = {'\r'})

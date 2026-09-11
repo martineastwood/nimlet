@@ -493,6 +493,11 @@ proc sessionMessageText*(message: Message): string =
     else:
       discard
 
+proc lastAssistantText*(session: Session): string =
+  for i in countdown(session.events.high, 0):
+    if session.events[i].kind == sekAssistant:
+      return sessionMessageText(session.events[i].message)
+
 proc tryLoadSession*(sessionDir: string, id: string):
                     tuple[ok: bool, session: Session, err: string] =
   let path = sessionDir / (id & ".jsonl")

@@ -189,6 +189,7 @@ proc previewSink(controller: NimletController): TurnSink =
       screen.composer.setText(text)
       screen.refreshMenu()
       refresh(),
+    copyText: proc (text: string) = copyToClipboard(text),
     generate: proc (provider: Provider,
                     request: ProviderRequest): Future[ProviderResponse] {.async.} =
       screen.activity = "Waiting for model…"

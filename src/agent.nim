@@ -430,7 +430,7 @@ proc setTheme*(agent: var Agent, value: string): string =
 
 proc applySlash(agent: ptr Agent, cmd: SlashCommand,
                 ui: TurnSink): Future[void] {.async.} =
-  ## Execute a parsed builtin. Caller has already filtered slNone/slSkill/slError/slQuit.
+  ## Execute a builtin; prompt-like commands are handled before this proc.
   case cmd.kind
   of slPlan, slAct:
     agent.mode = if cmd.kind == slPlan: modePlan else: modeAct
@@ -605,6 +605,15 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
           ui.onChange()
         except CatchableError as e:
           ui.emit(mlError, e.msg)
+  of slCopy:
+    let content = agent.session.lastAssistantText
+    if content.len == 0:
+      ui.emit(mlWarn, "No assistant response to copy.")
+    elif ui.copyText.isNil:
+      ui.emit(mlWarn, "Clipboard is unavailable in this interface.")
+    else:
+      ui.copyText(content)
+      ui.emit(mlOk, "Copied latest assistant response.")
   of slName:
     if cmd.arg.len == 0:
       ui.emit(mlPlain, if agent.session.name.len == 0: "(unnamed)"
@@ -615,9 +624,9 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
       ui.onChange()
   of slReload:
     agent[].rescanPlugins(ui)
-    ui.emit(mlOk, "Reloaded tools and hooks.")
+    ui.emit(mlOk, "Reloaded extensions, hooks, skills, and prompts.")
     ui.onChange()
-  of slQuit, slNone, slError, slSkill:
+  of slQuit, slNone, slError, slSkill, slPrompt:
     discard
 
 proc emitAutoCompact(ui: TurnSink, res: CompactionResult) =
@@ -917,11 +926,14 @@ proc processInputAsync*(agent: ptr Agent, input: string,
   let command = input.strip
   let cmd = parseSlash(command, agent.config.workspace)
   case cmd.kind
-  of slNone, slSkill:
+  of slNone, slSkill, slPrompt:
     if command.len == 0: return true
     discard agent.session.recoverInterruptedTools()
     let body = if cmd.kind == slSkill:
       let expanded = expandSkill(agent.config.workspace, cmd)
+      if expanded.len == 0: input else: expanded
+    elif cmd.kind == slPrompt:
+      let expanded = expandPrompt(agent.config.workspace, cmd)
       if expanded.len == 0: input else: expanded
     else:
       input
