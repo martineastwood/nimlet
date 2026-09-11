@@ -2,7 +2,7 @@
 
 import std/[asyncdispatch, json, strutils]
 import config, session, compaction, instructions, skills, models_dev, commands
-import nimterm/theme
+import nimterm/[ansi, theme]
 import events
 import workspace
 import images
@@ -81,9 +81,14 @@ type
     hookWarnings*: seq[string]
 
 proc statusFooter*(agent: Agent): string =
-  ## Interactive status-bar text: model, usage, context fill, session id, thinking.
+  ## Interactive status-bar text: model, usage, context fill, thinking.
+  const
+    modeWidth = 6
+    usageWidth = 8
+  proc column(text: string, width: int): string =
+    text & " ".repeat(max(0, width - ansiVisibleWidth(text)))
   var parts: seq[string] = @[]
-  parts.add "[" & $agent.mode & "]"
+  parts.add column("[" & $agent.mode & "]", modeWidth)
   let t = currentTheme
   if agent.yolo:
     parts.add t.paint(t.warning, "[yolo]")
@@ -95,7 +100,7 @@ proc statusFooter*(agent: Agent): string =
   if found:
     let labels = formatUsageLabels(usage)
     for label in labels:
-      parts.add t.paint(t.dim, label)
+      parts.add column(t.paint(t.dim, label), usageWidth)
     let cost = formatUsageCost(agent.config.provider, usageModel, usage)
     if cost.len > 0:
       parts.add t.paint(t.dim, cost)
@@ -109,8 +114,6 @@ proc statusFooter*(agent: Agent): string =
           elif pct >= 70: t.warning
           else: t.dim
         parts.add t.paint(color, "ctx " & $pct & "%")
-  if agent.session.id.len > 0:
-    parts.add t.paint(t.dim, "#" & agent.session.id)
   let level = thinkingStatus(agent.config)
   if level == "off":
     parts.add t.paint(t.dim, "think:off")
@@ -120,7 +123,7 @@ proc statusFooter*(agent: Agent): string =
     parts.add t.paint(t.warning, "web")
   elif agent.config.webSearch:
     parts.add t.paint(t.dim, "web:n/a")
-  parts.join("  ")
+  parts.join(" · ")
 
 proc attachProvider(agent: var Agent) =
   case agent.config.provider.toLowerAscii

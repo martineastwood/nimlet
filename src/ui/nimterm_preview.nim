@@ -10,11 +10,11 @@ import nimterm_screen
 export nimterm_controller, nimterm_screen
 
 proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
-  var body = "minimal coding agent\nWorkspace: " & agent.config.workspace &
-    "\nSession: " & agent.session.id
+  var body = "Workspace: " & agent.config.workspace &
+    " · Session: " & agent.session.id
   if catalogNote.len > 0: body.add "\n" & catalogNote
   let screen = newNimtermScreen(body, agent.config.workspace,
-    agent.config.sessionDir, modelPickerFrom(agent))
+    agent.config.sessionDir, modelPickerFrom(agent), agent.session.id)
   let backend = newPosixBackend()
   var app = newApp(backend, screen)
   ## Keep streamed output bounded to a smooth 60 FPS while keyboard events
@@ -26,11 +26,11 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
   defer: app.backend.shutdown()
   app.running = true
   if agent.session.events.len > 0:
-    screen.footer = "Loading session…"
+    screen.footer = screen.statusLine("Loading session…")
   app.render()
   if agent.session.events.len > 0:
     screen.replaySession(agent.session)
-    screen.footer = agent.statusFooter
+    screen.footer = screen.statusLine(agent.statusFooter)
     app.invalidate()
     app.render()
   if initialPrompt.len > 0:
@@ -45,6 +45,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
       if screen.busy:
         lastSpinnerFrame = int(max(0.0, epochTime() -
           screen.spinnerStartedAt) * 12.0) mod 10
+        screen.footer = screen.statusLine(agent.statusFooter)
       app.invalidate()
     ## step() returns before flushing when the backend had no event. Flush here
     ## so dirty status/footer changes are not held until the next keypress.

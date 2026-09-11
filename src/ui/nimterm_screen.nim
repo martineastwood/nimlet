@@ -2,10 +2,12 @@
 
 import std/[json, os, strutils, times]
 import nimgent
-import nimterm/[canvas, events, geometry, keys, style, theme, widget, widgets]
+import nimterm/[ansi, canvas, events, geometry, keys, style, theme, widget, widgets]
 import ../commands
 import ../config
+import ../images
 import ../session
+import ../workspace
 import diff
 
 type
@@ -26,10 +28,17 @@ type
     notice*: string
     noticeUntil*: float
     footer*: string
+    headerSessionId: string
+    headerSessionLine: int
+    headerSessionColumn: int
+    headerSelectionStart: int
+    headerSelectionEnd: int
+    headerSelectionStyle: Style
     themeName: string
     appliedThemeRevision: int
     stylesReady: bool
 const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+const statusActivityWidth = 26
 method focusable*(screen: NimtermScreen): bool = true
 
 method children*(screen: NimtermScreen): seq[Widget] =
@@ -39,11 +48,19 @@ method children*(screen: NimtermScreen): seq[Widget] =
     if screen.menu.items.len > 0: result.add screen.menu
     result.add screen.composer
 
-proc workingFooter*(screen: NimtermScreen, status: string): string =
+proc statusLine*(screen: NimtermScreen, status: string): string =
   let frame = int(max(0.0, epochTime() - screen.spinnerStartedAt) * 12.0) mod
     spinnerFrames.len
-  currentTheme.paint(currentTheme.accent,
-    spinnerFrames[frame]) & "  " & status
+  let activity = if screen.activity.len > 0: screen.activity else: "Ready"
+  let prefix = if screen.busy:
+    currentTheme.paint(currentTheme.accent, spinnerFrames[frame]) & " " & activity
+  else:
+    activity
+  prefix & " ".repeat(max(0, statusActivityWidth - ansiVisibleWidth(prefix))) &
+    " · " & status
+
+proc workingFooter*(screen: NimtermScreen, status: string): string =
+  screen.statusLine(status)
 
 proc loadHistory(screen: NimtermScreen) =
   let path = nimletConfigDir() / "history"
@@ -71,14 +88,16 @@ proc rememberInput(screen: NimtermScreen) =
   writeFile(path, body)
 
 proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
-                       modelPicker: ModelPicker): NimtermScreen =
+                       modelPicker: ModelPicker, sessionId = ""): NimtermScreen =
   let t = currentTheme
   let panelStyle = t.themedStyle(t.text, t.panelBg)
   let selectedStyle = t.themedStyle(t.selectedFg, t.selectedBg, {attrBold})
   let cursorBarStyle = t.themedStyle(t.accent, t.panelBg, {attrBold})
   let descriptionStyle = t.themedStyle(t.muted, t.panelBg)
   result = NimtermScreen(
-    header: newCard("nimlet", headerBody),
+    header: newCard("nimlet coding agent", headerBody,
+      t.themedStyle(t.muted), t.themedStyle(t.muted),
+      t.themedStyle(t.text, "", {attrBold})),
     menu: newMenu(@[], panelStyle, selectedStyle, "Commands", true,
       t.themedStyle(t.accent), t.themedStyle(t.heading), descriptionStyle,
       selectedStyle),
@@ -87,8 +106,23 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
       cursorBarStyle = cursorBarStyle),
     workspace: workspace,
     sessionDir: sessionDir,
-    modelPicker: modelPicker, themeName: t.name,
+    modelPicker: modelPicker, headerSessionId: sessionId,
+    headerSessionLine: -1, headerSessionColumn: -1,
+    headerSelectionStart: -1, headerSelectionEnd: -1,
+    headerSelectionStyle: selectedStyle, themeName: t.name,
     appliedThemeRevision: -1)
+  if sessionId.len > 0:
+    let prefix = "Session: "
+    let marker = prefix & sessionId
+    let lines = headerBody.splitLines
+    for i in 0 ..< lines.len:
+      let line = lines[i]
+      let start = line.find(marker)
+      if start >= 0:
+        result.headerSessionLine = i
+        result.headerSessionColumn = ansiVisibleWidth(line[0 ..< start]) +
+          prefix.len
+        break
   result.transcript.toolDetails = proc (name: string, input: JsonNode,
                                         output: string): seq[string] =
     let hunk = formatToolHunk(name, input, true, parseHunkSpans(output))
@@ -106,6 +140,25 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
   result.menu.style = panelStyle
   result.menu.selectedStyle = selectedStyle
   result.loadHistory()
+
+proc updateHeaderSession*(screen: NimtermScreen, sessionId: string) =
+  const prefix = "Session: "
+  screen.headerSessionId = sessionId
+  screen.headerSessionLine = -1
+  screen.headerSessionColumn = -1
+  screen.headerSelectionStart = -1
+  screen.headerSelectionEnd = -1
+  var lines = screen.header.body.splitLines
+  for i in 0 ..< lines.len:
+    let start = lines[i].find(prefix)
+    if start < 0: continue
+    let contentStart = start + prefix.len
+    lines[i] = lines[i][0 ..< contentStart] & sessionId
+    screen.header.body = lines.join("\n")
+    screen.headerSessionLine = i
+    screen.headerSessionColumn = ansiVisibleWidth(lines[i][0 ..< start]) +
+      prefix.len
+    return
 
 proc replaySession*(screen: NimtermScreen, session: Session) =
   if session.events.len == 0: return
@@ -192,9 +245,9 @@ proc refreshMenuTheme(screen: NimtermScreen) =
     screen.themeName = t.name
   screen.appliedThemeRevision = themeRevision
   screen.stylesReady = true
-  screen.header.style = t.themedStyle(t.text, t.panelBg)
-  screen.header.borderStyle = t.themedStyle(t.selectedFg, t.accent, {attrBold})
-  screen.header.titleStyle = screen.header.borderStyle
+  screen.header.style = t.themedStyle(t.muted)
+  screen.header.borderStyle = t.themedStyle(t.muted)
+  screen.header.titleStyle = t.themedStyle(t.text, "", {attrBold})
   screen.menu.style = t.themedStyle(t.text, t.panelBg)
   screen.menu.selectedStyle = t.themedStyle(t.selectedFg, t.selectedBg, {attrBold})
   screen.menu.descriptionStyle = t.themedStyle(t.muted, t.panelBg)
@@ -204,20 +257,67 @@ proc refreshMenuTheme(screen: NimtermScreen) =
   screen.composer.style = screen.menu.style
   screen.composer.cursorStyle = screen.menu.selectedStyle
   screen.composer.cursorBarStyle = t.themedStyle(t.accent, t.panelBg, {attrBold})
-  screen.transcript.userStyle = t.themedStyle(t.accent, t.panelBg, {attrBold})
+  screen.transcript.userStyle = t.themedStyle(t.muted)
   screen.transcript.assistantStyle = t.themedStyle(t.text)
-  screen.transcript.thinkingStyle = t.themedStyle(t.muted, t.panelBg,
-    {attrItalic})
-  screen.transcript.toolStyle = t.themedStyle(t.text, t.panelBg)
-  screen.transcript.errorStyle = t.themedStyle(t.error, t.panelBg, {attrBold})
+  screen.transcript.thinkingStyle = t.themedStyle(t.muted, "",
+    {attrDim, attrItalic})
+  screen.transcript.toolStyle = t.themedStyle(t.text)
+  screen.transcript.errorStyle = t.themedStyle(t.error, "", {attrBold})
   screen.transcript.userRailStyle = t.themedStyle(t.accent, t.panelBg, {attrBold})
-  screen.transcript.assistantRailStyle = t.themedStyle(t.model, "", {attrBold})
-  screen.transcript.thinkingRailStyle = t.themedStyle(t.muted, t.panelBg,
-    {attrBold})
-  screen.transcript.toolRailStyle = t.themedStyle(t.success, t.panelBg, {attrBold})
-  screen.transcript.errorRailStyle = t.themedStyle(t.error, t.panelBg, {attrBold})
+  screen.transcript.assistantRailStyle = defaultStyle()
+  screen.transcript.thinkingRailStyle = defaultStyle()
+  screen.transcript.toolRailStyle = t.themedStyle(t.muted)
+  screen.transcript.errorRailStyle = defaultStyle()
+  screen.headerSelectionStyle = screen.menu.selectedStyle
   screen.transcript.selectionStyle = t.themedStyle(t.selectedFg, t.selectedBg,
     {attrBold})
+
+proc headerSessionText(screen: NimtermScreen): string =
+  if screen.headerSelectionStart < 0 or screen.headerSelectionEnd < 0:
+    return ""
+  let first = min(screen.headerSelectionStart, screen.headerSelectionEnd)
+  let last = max(screen.headerSelectionStart, screen.headerSelectionEnd)
+  screen.headerSessionId[first .. last]
+
+proc handleHeaderMouse(screen: NimtermScreen, event: UiEvent): EventResponse =
+  if screen.headerSessionId.len == 0 or screen.headerSessionLine < 0:
+    return eventIgnored
+  let lineY = screen.header.area.y + 1 + screen.headerSessionLine
+  let firstX = screen.header.area.x + 1 + screen.headerSessionColumn
+  let column = clamp(event.x - firstX, 0, screen.headerSessionId.len - 1)
+  case event.mouse
+  of umPress:
+    if event.y != lineY or event.x < firstX or
+        event.x >= firstX + screen.headerSessionId.len:
+      return eventIgnored
+    screen.headerSelectionStart = column
+    screen.headerSelectionEnd = column
+    return captureHandled()
+  of umDrag:
+    if screen.headerSelectionStart < 0: return eventIgnored
+    screen.headerSelectionEnd = column
+    return eventHandled
+  of umRelease:
+    if screen.headerSelectionStart < 0: return eventIgnored
+    screen.headerSelectionEnd = column
+    let copied = screen.actionHandled("copy", screen.headerSessionText)
+    result = releaseHandled()
+    result.action = copied.action
+    return result
+  else:
+    return eventIgnored
+
+proc paintHeaderSelection(screen: NimtermScreen, canvas: var Canvas) =
+  if screen.headerSelectionStart < 0 or screen.headerSelectionEnd < 0:
+    return
+  let first = min(screen.headerSelectionStart, screen.headerSelectionEnd)
+  let last = max(screen.headerSelectionStart, screen.headerSelectionEnd)
+  let x = screen.header.area.x + 1 + screen.headerSessionColumn
+  let y = screen.header.area.y + 1 + screen.headerSessionLine
+  for column in first .. last:
+    var cell = canvas.getCell(x + column, y)
+    cell.style = screen.headerSelectionStyle
+    canvas.setCell(x + column, y, cell)
 
 proc submit*(screen: NimtermScreen): EventResponse =
   let text = screen.composer.text.strip
@@ -282,6 +382,35 @@ proc historyNext(screen: NimtermScreen) =
   screen.composer.cursor = screen.composer.text.len
   screen.refreshMenu()
 
+proc insertImageMention(screen: NimtermScreen, mention: string) =
+  let cursor = screen.composer.cursor
+  let before = cursor > 0 and screen.composer.text[cursor - 1] notin {' ', '\t', '\n'}
+  let after = cursor < screen.composer.text.len and
+    screen.composer.text[cursor] notin {' ', '\t', '\n'}
+  screen.historyIndex = -1
+  screen.composer.insert((if before: " " else: "") & mention &
+    (if after: " " else: ""))
+  screen.notice = "Image pasted"
+  screen.noticeUntil = epochTime() + 3.0
+  screen.refreshMenu()
+
+proc pasteImagePath(screen: NimtermScreen, pasted: string): bool =
+  let mention = ingestPastedPath(initWorkspace(screen.workspace), pasted)
+  if mention.len == 0: return false
+  screen.insertImageMention(mention)
+  true
+
+proc convertImagePathInput(screen: NimtermScreen): bool =
+  let mention = ingestPastedPath(initWorkspace(screen.workspace),
+    screen.composer.text)
+  if mention.len == 0: return false
+  screen.historyIndex = -1
+  screen.composer.setText(mention)
+  screen.notice = "Image pasted"
+  screen.noticeUntil = epochTime() + 3.0
+  screen.refreshMenu()
+  true
+
 method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
   if not screen.questionWidget.isNil:
     if event.kind == uiKey and event.key in {keyPageUp, keyPageDown}:
@@ -290,7 +419,8 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
       return screen.transcript.handle(event)
     if event.kind == uiMouse: return eventIgnored
     return screen.questionWidget.handle(event)
-  if event.kind == uiMouse: return eventIgnored
+  if event.kind == uiMouse:
+    return screen.handleHeaderMouse(event)
   if event.kind == uiKey and event.key in {keyChar, keyEnter, keyEscape} and
       screen.transcript.awaitingApproval:
     return screen.transcript.handle(event)
@@ -303,7 +433,7 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
     of keyEnter:
       if screen.composer.text.strip.len > 0:
         if screen.composer.text.strip.startsWith("/"):
-          screen.footer = "slash commands cannot be queued"
+          screen.footer = screen.statusLine("slash commands cannot be queued")
         else:
           let queued = screen.composer.text
           screen.rememberInput()
@@ -331,7 +461,12 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
   of keyBackspace, keyDelete, keyChar, keyLeft, keyRight, keyHome, keyEnd,
      keyCtrlA, keyCtrlE, keyCtrlU, keyAltB, keyAltF, keyShiftEnter:
     screen.historyIndex = -1
-    discard screen.composer.handle(event)
+    if event.key == keyChar and screen.pasteImagePath(event.text):
+      discard
+    else:
+      discard screen.composer.handle(event)
+      if event.key == keyChar:
+        discard screen.convertImagePathInput()
     screen.refreshMenu()
   of keyTab:
     if screen.menu.items.len == 0:
@@ -379,6 +514,7 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
   let headerHeight = min(max(1, screen.header.body.splitLines.len + 1), h)
   screen.refreshMenuTheme()
   screen.header.render(canvas, rect(0, 0, w, headerHeight))
+  screen.paintHeaderSelection(canvas)
   let textRows = screen.composer.visualLineCount(max(0, w -
     screen.composer.paddingLeft - screen.composer.paddingRight))
   let verticalPadding = if textRows == 1: 1 else: 0
@@ -416,7 +552,7 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
   var footer = screen.footer
   if screen.notice.len > 0:
     if epochTime() < screen.noticeUntil:
-      footer = footer & "  " &
+      footer = footer & " · " &
         currentTheme.paint(currentTheme.accent, screen.notice)
     else:
       screen.notice = ""

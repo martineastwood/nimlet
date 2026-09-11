@@ -15,6 +15,7 @@ import ../src/ui/turn
 import ../src/ui/nimterm_adapter
 import ../src/ui/nimterm_preview
 import ../src/ui/nimterm_screen
+import nimterm/ansi
 import nimterm/input
 import nimterm/keys
 import nimterm/theme
@@ -254,7 +255,57 @@ suite "black-box terminal integration":
     discard newNimletController(screen, addr app, addr agent)
     app.render()
     check "startup-model" in backend.frame.plainText
-    check "#" & agent.session.id in backend.frame.plainText
+    check "#" & agent.session.id notin backend.frame.plainText
+
+  test "session id can be selected from the banner":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    let agent = initAgent(config)
+    let id = agent.session.id
+    let body = "Workspace: " & root & " · Session: " & id
+    let backend = DecoderBackend(dimensions: size(140, 18))
+    let screen = newNimtermScreen(body, root, config.sessionDir,
+      ModelPicker(), id)
+    var app = termapp.newApp(backend, screen)
+    app.render()
+    let line = screen.header.body.splitLines[0]
+    let markerStart = line.find("Session: ")
+    let first = ansiVisibleWidth(line[0 ..< markerStart]) + "Session: ".len
+    let x = screen.header.area.x + 1 + first
+    let y = screen.header.area.y + 1
+    var response = screen.handle(UiEvent(kind: uiMouse, x: x, y: y,
+      mouse: umPress))
+    check response.captureMouse
+    discard screen.handle(UiEvent(kind: uiMouse, x: x + id.len - 1, y: y,
+      mouse: umDrag))
+    response = screen.handle(UiEvent(kind: uiMouse, x: x + id.len - 1, y: y,
+      mouse: umRelease))
+    check response.action.kind == "copy"
+    check response.action.value == id
+
+  test "new session updates the banner session id":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    let oldId = agent.session.id
+    let body = "Workspace: " & root & " · Session: " & oldId
+    let backend = DecoderBackend(dimensions: size(140, 18))
+    let screen = newNimtermScreen(body, root, config.sessionDir,
+      ModelPicker(), oldId)
+    var app = termapp.newApp(backend, screen)
+    discard newNimletController(screen, addr app, addr agent)
+    app.render()
+    check ("Session: " & oldId) in backend.frame.plainText
+    backend.feed("/new\r")
+    for _ in 0 .. 100: discard app.step()
+    check agent.session.id != oldId
+    check ("Session: " & agent.session.id) in backend.frame.plainText
+    check ("Session: " & oldId) notin backend.frame.plainText
 
   test "split key sequences route through a modal question":
     let root = freshDir()
@@ -872,7 +923,9 @@ suite "persistent agent sessions":
     check "↓4" in status
     check "R8" in status
     check "ctx 10%" in status
-    check "#status1" in status
+    check "status1" notin status
+    check " · " in status
+    check status.find(" · ") > 0
 
   test "context percent uses anthropic-style split totals":
     var usage = Usage(inputTokens: 100, outputTokens: 1, cacheReadTokens: 900,
@@ -2054,7 +2107,7 @@ suite "markdown rendering":
 
   test "colored mode adds ANSI codes":
     let rendered = renderMarkdown("**bold**", true)
-    check "\x1b[1;93m" in rendered
+    check "\x1b[1m" in rendered
     check "bold" in rendered
 
   test "bold italic combined":
@@ -2062,7 +2115,7 @@ suite "markdown rendering":
     check "both" in plain
     check "*" notin plain
     let colored = renderMarkdown("***both***", true)
-    check "\x1b[1;3;93m" in colored
+    check "\x1b[1;3m" in colored
     check "both" in colored
 
   test "fenced code blocks preserve content":
@@ -2099,7 +2152,7 @@ suite "markdown rendering":
   test "colored tables have header emphasis":
     let source = "| H1 | H2 |\n|----|----|\n| a  | b  |"
     let colored = renderMarkdown(source, true)
-    check "\x1b[1;93m" in colored
+    check "\x1b[1;34m" in colored
 
 suite "streaming markdown":
   test "markdown rerenders as streamed syntax completes":
@@ -2423,6 +2476,22 @@ suite "images":
     let copied = ingestPastedPath(ws, outside)
     check copied.startsWith("@.nimlet/clips/")
     check copied.endsWith(".jpg")
+
+  test "pasted image paths insert workspace mentions":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "shot.png", png)
+    let screen = newNimtermScreen("test", root, root / "sessions",
+      ModelPicker())
+    let response = screen.handle(UiEvent(kind: uiKey, key: keyChar,
+      text: root / "shot.png"))
+    check response.handled
+    check screen.composer.text == "@shot.png"
+    screen.composer.text = ""
+    screen.composer.cursor = 0
+    for ch in root / "shot.png":
+      discard screen.handle(UiEvent(kind: uiKey, key: keyChar, text: $ch))
+    check screen.composer.text == "@shot.png"
 
   test "PNG tile estimate and path-only session hydrate":
     proc be32(n: int): string =
@@ -3038,7 +3107,7 @@ suite "themes":
     check Dark256.selectedBg == "\e[48;5;81m"
     check Dark256.selectedFg == "\e[30m"
     check Dark256.boldAccent == "\e[1;36m"
-    check Dark256.heading == "\e[1;93m"
+    check Dark256.heading == "\e[1;34m"
     check Dark256.dim == "\e[2m"
     check Dark256.text == "\e[37m"
     let compiled = compileNamedTheme("dark", cd256)
@@ -3077,6 +3146,7 @@ suite "themes":
     "success": "#9ece6a",
     "error": "#f7768e",
     "warning": "#e0af68",
+    "code": "#d7af5f",
     "muted": 242,
     "dim": 240,
     "text": "",

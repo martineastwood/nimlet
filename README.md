@@ -177,7 +177,7 @@ preserved beside the session as `<session>.jsonl.recovery-<timestamp>`.
 - `Alt-B` / `Alt-F` — move the cursor by word
 - `Home`/`End`, `Ctrl-A`/`Ctrl-E` — jump to start / end of the line
 - `Up`/`Down`, `Ctrl-P`/`Ctrl-N` — history (and composer line up/down)
-- `Ctrl-O` — show or hide all tools
+- `Ctrl-O` — show or hide tool output and thinking details
 - `PgUp` / `PgDn` / mouse wheel — scroll the transcript
 
 Type `/help` at any prompt to see these in the running app.

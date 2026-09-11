@@ -67,7 +67,7 @@ proc catalogStartupNote(): string =
 
 proc printStartupBanner(agent: Agent, catalogNote: string) =
   let t = currentTheme
-  echo t.paint("\e[1m", "nimlet — minimal coding agent")
+  echo t.paint("\e[1m", "nimlet coding agent")
   echo t.paint(t.dim, "Provider: " & agent.config.provider & "  Model: " & agent.config.model)
   echo t.paint(t.dim, "Workspace: " & agent.config.workspace)
   echo t.paint(t.dim, "Session: " & agent.session.id)

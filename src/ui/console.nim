@@ -57,7 +57,7 @@ proc printResponse*(response: ProviderResponse) =
   for label in formatUsageLabels(response.usage):
     stats.add t.paint(t.dim, label)
   if stats.len > 0:
-    stdout.write t.paint(t.dim, stats.join("  ")) & "\n"
+    stdout.write t.paint(t.dim, stats.join(" · ")) & "\n"
   stdout.flushFile()
 
 proc printHelp*() =

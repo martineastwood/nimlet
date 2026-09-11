@@ -68,7 +68,8 @@ proc requestInterrupt(controller: NimletController) =
   controller.interruptRequested = true
   controller.signalCancel()
   controller.screen.activity = "Stopping…"
-  controller.screen.footer = controller.screen.workingFooter("Stopping…")
+  controller.screen.footer = controller.screen.statusLine(
+    controller.agent[].statusFooter)
 
 proc previewSink(controller: NimletController): TurnSink =
   let screen = controller.screen
@@ -79,12 +80,13 @@ proc previewSink(controller: NimletController): TurnSink =
   var pendingDelta: NimletEvent
   var hasPendingDelta = false
   var lastDeltaFlush = 0.0
+  var thinkingRefreshShown = false
+  proc thinkingExpanded(event: NimletEvent): bool =
+    let id = event.runId & ":" & $event.step & ":thinking"
+    for item in screen.transcript.transcript.items:
+      if item.id == id: return item.expanded
   proc refresh(force = true) =
-    let status = if screen.activity.len > 0:
-      screen.activity & "  " & agent[].statusFooter
-    else:
-      agent[].statusFooter
-    screen.footer = if screen.busy: screen.workingFooter(status) else: status
+    screen.footer = screen.statusLine(agent[].statusFooter)
     app[].invalidate()
     app[].flush(force)
   proc flushPendingDelta() =
@@ -95,6 +97,8 @@ proc previewSink(controller: NimletController): TurnSink =
   proc send(event: NimletEvent) =
     let uiEvent = event.toAgentUiEvent
     if uiEvent.kind == ueRunStarted: runId = uiEvent.runId
+    if uiEvent.kind in {ueRunStarted, ueStepStarted}:
+      thinkingRefreshShown = false
     if uiEvent.kind == ueStepStarted: step = uiEvent.step
     if event.kind in {neTextDelta, neThinkingDelta}:
       if hasPendingDelta and (pendingDelta.kind != event.kind or
@@ -107,8 +111,13 @@ proc previewSink(controller: NimletController): TurnSink =
       else:
         pendingDelta.text.add event.text
       if lastDeltaFlush == 0.0 or epochTime() - lastDeltaFlush >= 0.016:
+        let deltaKind = pendingDelta.kind
         flushPendingDelta()
-        refresh(false)
+        if deltaKind != neThinkingDelta or thinkingExpanded(pendingDelta) or
+            not thinkingRefreshShown:
+          refresh(false)
+          if deltaKind == neThinkingDelta:
+            thinkingRefreshShown = true
       return
     flushPendingDelta()
     screen.transcript.apply(uiEvent)
@@ -167,6 +176,7 @@ proc previewSink(controller: NimletController): TurnSink =
       controller.interruptRequested,
     noteInterrupted: proc () = discard,
     showSession: proc (session: Session) =
+      screen.updateHeaderSession(session.id)
       screen.transcript.setTranscript(newTranscript())
       screen.replaySession(session)
       refresh(),
@@ -210,7 +220,7 @@ proc resetInteraction(controller: NimletController) =
   controller.approvalFuture = nil
   screen.activity = ""
   screen.modelPicker = modelPickerFrom(controller.agent[])
-  screen.footer = controller.agent[].statusFooter
+  screen.footer = screen.statusLine(controller.agent[].statusFooter)
   controller.app[].focus(screen)
   controller.app[].invalidate()
 
@@ -225,7 +235,7 @@ proc startSubmission*(controller: NimletController, text: string) =
   controller.interruptRequested = false
   screen.activity = "Thinking…"
   screen.spinnerStartedAt = epochTime()
-  screen.footer = screen.workingFooter(controller.agent[].statusFooter)
+  screen.footer = screen.statusLine(controller.agent[].statusFooter)
   screen.transcript.appendUser(text)
   controller.turns.active = processInputAsync(controller.agent, text,
     controller.ui)
@@ -292,11 +302,15 @@ proc handleAction*(controller: NimletController, running: var App,
         text: action.value, cancelled: action.cancelled)
   of "screen":
     case action.kind
+    of "copy":
+      copyToClipboard(action.value)
+      screen.notice = "Copied session ID"
+      screen.noticeUntil = epochTime() + 2.0
     of "quit": running.running = false
     of "toggle-mode":
       controller.agent[].mode = if controller.agent[].mode == modeAct:
         modePlan else: modeAct
-      screen.footer = controller.agent[].statusFooter
+      screen.footer = screen.statusLine(controller.agent[].statusFooter)
     of "queue": controller.queuedInput = action.value
     of "queue-mode-toggle":
       controller.modeSwitchPending = not controller.modeSwitchPending
@@ -317,7 +331,7 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
     discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
     discard fcntl(result.cancelWrite, F_SETFL, O_NONBLOCK)
   let controller = result
-  screen.footer = agent[].statusFooter
+  screen.footer = screen.statusLine(agent[].statusFooter)
   result.ui = previewSink(result)
   result.turns.onFinish = proc (keepRunning, succeeded: bool) =
     controller.finishTurn(keepRunning, succeeded)
