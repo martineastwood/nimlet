@@ -31,6 +31,9 @@ jobs:
           nim-version: ${{ matrix.nim-version }}
           use-nightlies: false
 
+      - name: Install nimterm dependencies
+        run: cd ../nimterm && nimble install -d -y
+
       - name: Run tests
         # Run from the checkout so nim.cfg keeps the sibling source paths.
         run: nim c -r --hints:off tests/all_tests.nim
