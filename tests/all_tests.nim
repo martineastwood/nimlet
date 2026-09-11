@@ -804,7 +804,7 @@ suite "OpenRouter provider":
     let config = loadConfig(root, root / "config.json")
     check config.provider == "openrouter"
     check config.model == "deepseek/deepseek-v4-flash-0731"
-    check config.apiKeyEnv == "OPENROUTER_API_KEY"
+    check config.apiKeySource == "{env:OPENROUTER_API_KEY}"
     check config.endpoint == "https://openrouter.ai/api/v1/chat/completions"
     check nimletConfigDir().extractFilename == ".nimlet"
 
@@ -833,7 +833,7 @@ suite "OpenRouter provider":
     var config = loadConfig(root, root / "config.json")
     check config.provider == "openai"
     check config.model == "gpt-5"
-    check config.apiKeyEnv == "OPENAI_API_KEY"
+    check config.apiKeySource == "{env:OPENAI_API_KEY}"
     check config.endpoint == "https://api.openai.com/v1/responses"
     config.thinking = "high"
     check providerOptions(config)["reasoning"]["effort"].getStr == "high"
@@ -850,7 +850,7 @@ suite "OpenRouter provider":
     var config = loadConfig(root, root / "config.json")
     check config.provider == "hyper"
     check config.model == "deepseek-v4-flash"
-    check config.apiKeyEnv == "HYPER_API_KEY"
+    check config.apiKeySource == "{env:HYPER_API_KEY}"
     check config.endpoint == "https://hyper.charm.land/v1/chat/completions"
     config.thinking = "high"
     check providerOptions(config)["reasoning"]["effort"].getStr == "high"
@@ -867,7 +867,7 @@ suite "OpenRouter provider":
     var config = loadConfig(root, root / "config.json")
     check config.provider == "google"
     check config.model == "gemini-3.5-flash-lite"
-    check config.apiKeyEnv == "AI_STUDIO_API_KEY"
+    check config.apiKeySource == "{env:AI_STUDIO_API_KEY}"
     check config.endpoint == "https://generativelanguage.googleapis.com/v1beta"
     config.thinking = "high"
     check providerOptions(config)["reasoning_effort"].getStr == "high"
@@ -1829,11 +1829,11 @@ suite "json config":
     defer: removeDir(root)
     let path = root / "config.json"
     writeFile(path, """{"default_provider":"hyper","default_model":"custom-hyper",
-      "providers":{"anthropic":{"api_key_env":"CUSTOM_ANTHROPIC_KEY","endpoint":"https://example.com/messages"}}}""")
+      "providers":{"anthropic":{"api_key":"{env:CUSTOM_ANTHROPIC_KEY}","endpoint":"https://example.com/messages"}}}""")
     var config = loadConfig(root, path)
     config.switchProvider("anthropic")
     check config.model == "claude-sonnet-4-6"
-    check config.apiKeyEnv == "CUSTOM_ANTHROPIC_KEY"
+    check config.apiKeySource == "{env:CUSTOM_ANTHROPIC_KEY}"
     config.model = "custom-claude"
     config.switchProvider("hyper")
     check config.model == "custom-hyper"
@@ -1855,7 +1855,7 @@ suite "json config":
     defer: delEnv(envName)
     let path = root / "config.json"
     writeFile(path, """{"default_provider":"anthropic","providers":{"anthropic":{
-      "api_key_env":"NIMLET_TEST_DOCTOR_KEY","endpoint":"https://user:password@example.com/v1/messages?key=hidden#fragment"}}}""")
+      "api_key":"{env:NIMLET_TEST_DOCTOR_KEY}","endpoint":"https://user:password@example.com/v1/messages?key=hidden#fragment"}}}""")
     let report = doctorReport(loadConfig(root, path))
     check envName & " set" in report
     check path in report
@@ -1866,6 +1866,22 @@ suite "json config":
     check parseSlash("/doctor test").arg == "test"
     check parseSlash("/doctor invalid").kind == slError
     check parseSlash("/doctor test extra").kind == slError
+
+  test "API keys resolve from environment, literals, and config-relative files":
+    let root = freshDir()
+    defer: removeDir(root)
+    putEnv("NIMLET_TEST_CUSTOM_KEY", "from-env")
+    defer: delEnv("NIMLET_TEST_CUSTOM_KEY")
+    writeFile(root / "key", "from-file\n")
+    for pair in [
+        ("{env:NIMLET_TEST_CUSTOM_KEY}", "from-env"),
+        ("{file:key}", "from-file"),
+        ("literal-key", "literal-key")]:
+      let (source, expected) = pair
+      let path = root / "config.json"
+      writeFile(path, $(%*{"default_provider": "openai",
+        "providers": {"openai": {"api_key": source}}}))
+      check loadConfig(root, path).apiKey == expected
 
   test "doctor test uses an isolated request and leaves session and config untouched":
     let root = freshDir()

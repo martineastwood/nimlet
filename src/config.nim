@@ -24,7 +24,7 @@ type
     ## Merged default_model at load; `/model` updates `model` and the write file.
     defaultModel*: string
     theme*: string
-    apiKeyEnv*: string
+    apiKeySource*: string
     endpoint*: string
     siteUrl*: string
     siteName*: string
@@ -218,13 +218,13 @@ proc overrideNamed*[T](items: var seq[T], item: T) =
       return
   items.add item
 
-proc defaultApiKeyEnv*(provider: string): string =
+proc defaultApiKeySource*(provider: string): string =
   case provider.toLowerAscii
-  of "openrouter": "OPENROUTER_API_KEY"
-  of "openai": "OPENAI_API_KEY"
-  of "anthropic": "ANTHROPIC_API_KEY"
-  of "hyper": "HYPER_API_KEY"
-  of "google": "AI_STUDIO_API_KEY"
+  of "openrouter": "{env:OPENROUTER_API_KEY}"
+  of "openai": "{env:OPENAI_API_KEY}"
+  of "anthropic": "{env:ANTHROPIC_API_KEY}"
+  of "hyper": "{env:HYPER_API_KEY}"
+  of "google": "{env:AI_STUDIO_API_KEY}"
   else: ""
 
 proc defaultEndpoint*(provider: string): string =
@@ -322,9 +322,7 @@ proc fillProvider*(config: var AgentConfig, provider: string) =
   let p = provider.toLowerAscii
   config.provider = p
   let settings = config.providerBlock(p)
-  config.apiKeyEnv = jstr(settings, "api_key_env")
-  if config.apiKeyEnv.len == 0:
-    config.apiKeyEnv = defaultApiKeyEnv(p)
+  config.apiKeySource = jstr(settings, "api_key", defaultApiKeySource(p))
   config.endpoint = jstr(settings, "endpoint")
   if config.endpoint.len == 0:
     config.endpoint = defaultEndpoint(p)
@@ -338,6 +336,9 @@ proc switchProvider*(config: var AgentConfig, provider: string) =
   config.fillProvider(p)
   config.model = config.lastModels.getOrDefault(p, defaultProviderModel(p))
   config.defaultModel = config.model
+
+proc apiKey*(config: AgentConfig): string
+proc apiKeyDescription*(config: AgentConfig): string
 
 proc doctorReport*(config: AgentConfig): string =
   result = "Provider: " & config.provider & "\nModel: " & config.model
@@ -354,8 +355,8 @@ proc doctorReport*(config: AgentConfig): string =
   for p in WiredProviders:
     var selected = config
     selected.fillProvider(p)
-    result.add "\n" & p & ": " & selected.apiKeyEnv & " " &
-      (if getEnv(selected.apiKeyEnv).len > 0: "set" else: "missing")
+    result.add "\n" & p & ": " & selected.apiKeyDescription & " " &
+      (if selected.apiKey.len > 0: "set" else: "missing")
   result.add "\nUse /doctor test for a small API request to the selected provider."
 
 proc expandConfigPath(value, fallback: string): string =
@@ -368,6 +369,18 @@ proc expandConfigPath(value, fallback: string): string =
   if value.isAbsolute:
     return value.normalizedPath
   (getCurrentDir() / value).normalizedPath
+
+proc prepareCredentials(doc: JsonNode, path: string): JsonNode =
+  result = copy(doc)
+  for _, settings in jobj(result, "providers"):
+    if settings.kind != JObject: continue
+    let source = jstr(settings, "api_key")
+    if not source.startsWith("{file:") or not source.endsWith("}"): continue
+    let value = source[6 .. ^2]
+    let resolved = if value.startsWith("~/"): getHomeDir() / value[2 .. ^1]
+      elif value.isAbsolute: value
+      else: path.parentDir / value
+    settings["api_key"] = %("{file:" & resolved.normalizedPath & "}")
 
 proc applyDoc(config: var AgentConfig, doc: JsonNode) =
   config.providers = jobj(doc, "providers")
@@ -447,7 +460,7 @@ proc loadConfig*(workspace = getCurrentDir(), configPath = "",
   if configPath.len > 0:
     result.sourcePaths = @[configPath]
     result.writePath = configPath
-    result.applyDoc(loadJsonFile(configPath))
+    result.applyDoc(prepareCredentials(loadJsonFile(configPath), configPath))
     return
   let globalFile = if globalPath.len > 0: globalPath
                    else: nimletConfigDir() / "config.json"
@@ -455,7 +468,23 @@ proc loadConfig*(workspace = getCurrentDir(), configPath = "",
   let projectFile = projectDir / "config.json"
   result.sourcePaths = @[globalFile, projectFile]
   result.writePath = if dirExists(projectDir): projectFile else: globalFile
-  result.applyDoc(overlay(loadJsonFile(globalFile), loadJsonFile(projectFile)))
+  let globalDoc = prepareCredentials(loadJsonFile(globalFile), globalFile)
+  let projectDoc = prepareCredentials(loadJsonFile(projectFile), projectFile)
+  result.applyDoc(overlay(globalDoc, projectDoc))
 
 proc apiKey*(config: AgentConfig): string =
-  getEnv(config.apiKeyEnv)
+  let source = config.apiKeySource
+  if source.startsWith("{env:") and source.endsWith("}"):
+    return getEnv(source[5 .. ^2])
+  if source.startsWith("{file:") and source.endsWith("}"):
+    try: return readFile(source[6 .. ^2]).strip(leading = false, chars = {'\r', '\n'})
+    except CatchableError: return ""
+  source
+
+proc apiKeyDescription*(config: AgentConfig): string =
+  let source = config.apiKeySource
+  if source.startsWith("{env:") and source.endsWith("}"):
+    return "env " & source[5 .. ^2]
+  if source.startsWith("{file:") and source.endsWith("}"):
+    return "file " & source[6 .. ^2]
+  "literal"

@@ -20,7 +20,7 @@ versions; `nimterm` is currently developed from this sibling checkout.
 
 Windows is not supported natively. Use [WSL](https://learn.microsoft.com/windows/wsl) and build inside the Linux environment.
 
-Set the provider's API key before starting the agent:
+By default, set the provider's API key before starting the agent:
 `OPENROUTER_API_KEY` for OpenRouter, `OPENAI_API_KEY` for OpenAI,
 `ANTHROPIC_API_KEY` for Anthropic, `HYPER_API_KEY` for Hyper, or
 `AI_STUDIO_API_KEY` for Google Gemini.
@@ -39,7 +39,8 @@ workspace and overlays `~/.nimlet/config.json`. Global files live in
 To use Anthropic, run `/provider anthropic`. The first switch selects
 `claude-sonnet-4-6`; subsequent switches restore your last model for that provider.
 Use `/model <id>` to change it. Choices persist in `providers.<name>.last_model`.
-The key is read from `ANTHROPIC_API_KEY`; no key belongs in the config file.
+The key defaults to `ANTHROPIC_API_KEY`; `providers.anthropic.api_key` can
+select another environment variable, a credential file, or a literal value.
 Native streaming, tool calls, thinking (`/thinking high`), and hosted search
 (`/web on`) are supported. Known modern Claude models use adaptive thinking
 and model-supported effort levels; legacy thinking budgets are added once to
@@ -64,19 +65,19 @@ Configuration example:
   "default_model": "deepseek/deepseek-v4-flash-0731",
   "providers": {
     "openrouter": {
-      "api_key_env": "OPENROUTER_API_KEY"
+      "api_key": "{env:OPENROUTER_API_KEY}"
     },
     "openai": {
-      "api_key_env": "OPENAI_API_KEY"
+      "api_key": "{file:~/.secrets/openai-key}"
     },
     "anthropic": {
-      "api_key_env": "ANTHROPIC_API_KEY"
+      "api_key": "{env:ANTHROPIC_API_KEY}"
     },
     "hyper": {
-      "api_key_env": "HYPER_API_KEY"
+      "api_key": "{env:HYPER_API_KEY}"
     },
     "google": {
-      "api_key_env": "AI_STUDIO_API_KEY"
+      "api_key": "{env:AI_STUDIO_API_KEY}"
     }
   },
   "agent": {
@@ -86,6 +87,10 @@ Configuration example:
   }
 }
 ```
+
+`api_key` accepts `{env:NAME}`, `{file:path}`, or a literal key. Relative file
+paths resolve from the config file that defines them, and `~` is supported.
+Credential files may end with a newline.
 
 Provider blocks also accept an `options` object with native API request fields:
 
