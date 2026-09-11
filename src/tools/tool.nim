@@ -9,9 +9,12 @@ type
   CancelCheck* = proc (): bool {.closure.}
   OutputCallback* = proc (output: string) {.closure.}
 
+  ToolEntry = object
+    definition: ToolDefinition
+    run: ToolProc
+
   ToolRegistry* = object
-    tools: OrderedTable[string, ToolProc]
-    definitions: seq[ToolDefinition]
+    tools: OrderedTable[string, ToolEntry]
 
 var activeCancel {.threadvar.}: CancelCheck
 var activeOutput {.threadvar.}: OutputCallback
@@ -25,12 +28,12 @@ proc streamOutput*(output: string) =
 
 proc register*(reg: var ToolRegistry, def: ToolDefinition, fn: ToolProc) =
   if reg.tools.len == 0:
-    reg.tools = initOrderedTable[string, ToolProc]()
-  reg.tools[def.name] = fn
-  reg.definitions.add def
+    reg.tools = initOrderedTable[string, ToolEntry]()
+  reg.tools[def.name] = ToolEntry(definition: def, run: fn)
 
 proc definitions*(reg: ToolRegistry): seq[ToolDefinition] =
-  reg.definitions
+  for entry in reg.tools.values:
+    result.add entry.definition
 
 proc execute*(reg: ToolRegistry, name: string, input: JsonNode,
               shouldCancel: CancelCheck = nil,
@@ -46,7 +49,7 @@ proc execute*(reg: ToolRegistry, name: string, input: JsonNode,
     activeCancel = prev
     activeOutput = prevOutput
   try:
-    result = await reg.tools[name](input)
+    result = await reg.tools[name].run(input)
     if result.isError and result.error.code.len == 0:
       result.error = toolError("tool_error", result.output)
   except CatchableError as e:

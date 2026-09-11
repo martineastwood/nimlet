@@ -304,6 +304,25 @@ suite "black-box terminal integration":
     check app.step()
     check backend.frame.size == size(72, 22)
 
+  test "submitted messages appear once in the transcript":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    agent.provider = TestProvider(responses: @[
+      ProviderResponse(content: @[text("done")], finishReason: frEndTurn)])
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    var app = termapp.newApp(backend, screen)
+    discard newNimletController(screen, addr app, addr agent)
+    app.render()
+    backend.feed("hello\r")
+    for _ in 0 .. 30: discard app.step()
+    check screen.transcript.transcript.items.filterIt(it.text == "hello").len == 1
+
   test "slash commands can follow one another":
     let root = freshDir()
     defer: removeDir(root)

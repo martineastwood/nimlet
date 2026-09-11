@@ -85,7 +85,6 @@ proc requestInterrupt(controller: NimletController) =
 proc previewSink(controller: NimletController): TurnSink =
   let screen = controller.screen
   let app = controller.app
-  let agent = controller.agent
   var runId = ""
   var step = -1
   var pendingDelta: NimletEvent
@@ -255,7 +254,6 @@ proc startSubmission*(controller: NimletController, text: string) =
   screen.activity = "Thinking…"
   screen.spinnerStartedAt = epochTime()
   controller.refreshFooter()
-  screen.transcript.appendUser(text)
   controller.turns.active = processInputAsync(controller.agent, text,
     controller.ui)
 
