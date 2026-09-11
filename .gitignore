@@ -9,3 +9,6 @@ tests/all_tests
 .nimble/
 SCOPE.md
 AGENTS.md
+nimble.develop
+nimble.paths
+nimbledeps

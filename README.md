@@ -1,6 +1,6 @@
 # nimlet
 
-A minimal native coding agent written in Nim.
+A native coding agent written in Nim.
 
 ## Build and test
 

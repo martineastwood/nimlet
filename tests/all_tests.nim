@@ -212,6 +212,48 @@ suite "black-box terminal integration":
     check app.step()
     check backend.frame.size == size(72, 22)
 
+  test "slash commands can follow one another":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    var app = termapp.newApp(backend, screen)
+    let controller = newNimletController(screen, addr app, addr agent)
+    app.render()
+    backend.feed("/provider anthropic\r")
+    for _ in 0 .. 100: discard app.step()
+    check agent.config.provider == "anthropic"
+    check not controller.busy
+    check app.focus == screen
+    backend.feed("/model")
+    for _ in 0 .. 20: discard app.step()
+    check screen.menu.items.len > 0
+    backend.feed("\r/exit\r")
+    for _ in 0 .. 100: discard app.step()
+    check not app.running
+
+  test "status bar is visible before the first message":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    config.model = "startup-model"
+    var agent = initAgent(config)
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    var app = termapp.newApp(backend, screen)
+    discard newNimletController(screen, addr app, addr agent)
+    app.render()
+    check "startup-model" in backend.frame.plainText
+    check "#" & agent.session.id in backend.frame.plainText
+
   test "split key sequences route through a modal question":
     let root = freshDir()
     defer: removeDir(root)

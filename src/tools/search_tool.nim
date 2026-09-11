@@ -1,6 +1,6 @@
 ## grep and glob — find files and content without shelling out to bash.
 
-import std/[asyncdispatch, json, os, re, strutils]
+import std/[asyncdispatch, atomics, json, os, re, strutils]
 import tool, ../workspace, nimgent
 
 const
@@ -8,6 +8,63 @@ const
   maxGrepHits = 200
   defaultGlobHits = 200
   maxScanBytes = 1_000_000
+
+proc grepWorkspace*(root, pattern, glob, relPath: string, maxHits: int,
+                    insensitive: bool): seq[string]
+proc globWorkspace*(root, pattern, relPath: string, maxHits: int): seq[string]
+
+type
+  SearchOperation = enum
+    soGrep
+    soGlob
+
+when compileOption("threads"):
+  type SearchJob = ref object
+    operation: SearchOperation
+    root, pattern, glob, relPath: string
+    maxHits: int
+    insensitive: bool
+    hits: seq[string]
+    error: string
+    finished: Atomic[bool]
+
+  proc runSearchWorkerImpl(job: SearchJob) {.gcsafe.} =
+    try:
+      if job.operation == soGrep:
+        let fn = cast[proc (root, pattern, glob, relPath: string, maxHits: int,
+                            insensitive: bool): seq[string] {.nimcall, gcsafe.}](grepWorkspace)
+        job.hits = fn(job.root, job.pattern, job.glob, job.relPath,
+          job.maxHits, job.insensitive)
+      else:
+        let fn = cast[proc (root, pattern, relPath: string, maxHits: int):
+                       seq[string] {.nimcall, gcsafe.}](globWorkspace)
+        job.hits = fn(job.root, job.pattern, job.relPath, job.maxHits)
+    except CatchableError as e:
+      job.error = e.msg
+    job.finished.store(true)
+
+  proc runSearchWorker(job: SearchJob) {.thread.} =
+    runSearchWorkerImpl(job)
+
+proc searchAsync(operation: SearchOperation, root, pattern, glob, relPath: string,
+                 maxHits: int, insensitive: bool): Future[seq[string]] {.async.} =
+  when compileOption("threads"):
+    let job = SearchJob(operation: operation, root: root, pattern: pattern,
+      glob: glob, relPath: relPath, maxHits: maxHits,
+      insensitive: insensitive)
+    job.finished.store(false)
+    var thread: Thread[SearchJob]
+    createThread(thread, runSearchWorker, job)
+    while not job.finished.load:
+      await sleepAsync(2)
+    joinThread(thread)
+    if job.error.len > 0:
+      raise newException(IOError, job.error)
+    return job.hits
+  else:
+    if operation == soGrep:
+      return grepWorkspace(root, pattern, glob, relPath, maxHits, insensitive)
+    return globWorkspace(root, pattern, relPath, maxHits)
 
 proc underPrefix(rel, prefix: string): bool =
   if prefix.len == 0: return true
@@ -86,10 +143,16 @@ proc makeGrepTool*(ws: Workspace): (ToolDefinition, ToolProc) =
                   else: defaultGrepHits
     var hits: seq[string]
     try:
-      hits = grepWorkspace(ws.root, pattern, input.getOrDefault("glob").getStr,
-        rel, maxHits, input.getOrDefault("case_insensitive").getBool)
+      let insensitive = input.getOrDefault("case_insensitive").getBool
+      ## Compile the expression on the UI thread so invalid patterns keep their
+      ## useful error, while the repository scan runs away from the TUI.
+      discard re(pattern, if insensitive: {reIgnoreCase, reStudy} else: {reStudy})
+      hits = await searchAsync(soGrep, ws.root, pattern,
+        input.getOrDefault("glob").getStr, rel, maxHits, insensitive)
     except RegexError as e:
       return ToolResult(output: "invalid pattern: " & e.msg, isError: true)
+    except CatchableError as e:
+      return ToolResult(output: "search failed: " & e.msg, isError: true)
     if hits.len == 0:
       return ToolResult(output: "No matches.")
     var buf = hits.join("\n")
@@ -121,7 +184,12 @@ proc makeGlobTool*(ws: Workspace): (ToolDefinition, ToolProc) =
         discard ws.resolve(rel)
       except WorkspaceError as e:
         return ToolResult(output: e.msg, isError: true)
-    let hits = globWorkspace(ws.root, pattern, rel, defaultGlobHits)
+    var hits: seq[string]
+    try:
+      hits = await searchAsync(soGlob, ws.root, pattern, "", rel,
+        defaultGlobHits, false)
+    except CatchableError as e:
+      return ToolResult(output: "glob failed: " & e.msg, isError: true)
     if hits.len == 0:
       return ToolResult(output: "No files.")
     var buf = hits.join("\n")

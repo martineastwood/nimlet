@@ -468,7 +468,7 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
       of slResume:
         let prefix = if parts.len >= 2: parts[1] else: ""
         if sessionDir.len > 0 and (parts.len <= 1 or incomplete or prefix.len > 0):
-          for info in listSessions(sessionDir, workspace):
+          for info in listSessionsCached(sessionDir, workspace):
             if prefix.len == 0 or info.id.startsWith(prefix):
               result.add "/resume " & info.id
           if result.len > 0:
@@ -519,9 +519,8 @@ proc commandSuggestionDescription*(suggestion: string,
   const modelPrefix = "/model "
   if sessionDir.len > 0 and suggestion.startsWith(resumePrefix):
     let id = suggestion[resumePrefix.len .. ^1].strip
-    let info = peekSession(sessionDir, id)
-    if info.id.len > 0:
-      return sessionLabel(info)
+    for info in listSessionsCached(sessionDir, workspace):
+      if info.id == id: return sessionLabel(info)
   if suggestion.startsWith(modelPrefix):
     let id = suggestion[modelPrefix.len .. ^1]
     if id.len > 0 and id[0] != '[':

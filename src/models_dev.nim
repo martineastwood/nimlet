@@ -8,6 +8,10 @@
 import std/[httpclient, json, os, strutils, times]
 import nimgent
 
+type CatalogIndexEntry = object
+  provider, id, idLower: string
+  context: int
+
 const
   modelsDevUrl* = "https://models.dev/api.json"
   defaultTtlSeconds = 24 * 60 * 60
@@ -18,6 +22,8 @@ var
   gCatalogPath = ""
   gLoadedAt = 0.0
   gForcePath = ""  ## tests: pin cache file / skip network when pre-seeded
+  gCatalogIndex: seq[CatalogIndexEntry]
+  gCatalogIndexLoadedAt = -1.0
 
 proc cachePath(): string =
   if gForcePath.len > 0: return gForcePath
@@ -30,6 +36,7 @@ proc setModelsDevCachePath*(path: string) =
   gForcePath = path
   gCatalog = nil
   gLoadedAt = 0
+  gCatalogIndexLoadedAt = -1
 
 proc contextFromModelNode(node: JsonNode): int =
   if node.isNil or node.kind != JObject: return 0
@@ -282,28 +289,39 @@ proc orderedProviders(providers: openArray[string], prefer: string): seq[string]
         result.add x
         break
 
-proc modelFromNode(provider, id: string, node: JsonNode): CatalogModel =
-  CatalogModel(provider: provider, id: id, context: contextFromModelNode(node))
+proc catalogIndex(): seq[CatalogIndexEntry] =
+  let catalog = ensureCatalog()
+  if gCatalogIndexLoadedAt == gLoadedAt:
+    return gCatalogIndex
+  gCatalogIndex.setLen(0)
+  for provider, node in catalog:
+    if node.isNil or node.kind != JObject: continue
+    let models = node.getOrDefault("models")
+    if models.isNil or models.kind != JObject: continue
+    for id, model in models:
+      gCatalogIndex.add CatalogIndexEntry(provider: provider,
+        id: id, idLower: id.toLowerAscii,
+        context: contextFromModelNode(model))
+  gCatalogIndexLoadedAt = gLoadedAt
+  gCatalogIndex
 
 proc findCatalogModel*(id: string, providers: openArray[string],
                        prefer = ""): tuple[found: bool, model: CatalogModel] =
   ## Exact id match. Prefer `prefer`, then OpenRouter, then the rest.
   if id.len == 0: return
-  let catalog = ensureCatalog()
   let want = id.toLowerAscii
   for p in orderedProviders(providers, prefer):
-    let models = catalog.getOrDefault(p).getOrDefault("models")
-    if models.isNil or models.kind != JObject: continue
-    for key, node in models:
-      if key.toLowerAscii == want:
-        return (true, modelFromNode(p, key, node))
+    let provider = p.toLowerAscii
+    for entry in catalogIndex():
+      if entry.provider == provider and entry.idLower == want:
+        return (true, CatalogModel(provider: entry.provider, id: entry.id,
+          context: entry.context))
 
 proc searchCatalogModels*(providers: openArray[string], query: string,
                           cap: int, prefer = "",
                           skip: openArray[string] = []): seq[CatalogModel] =
   ## Substring match on id, `prefer` provider first. Cap at `cap`.
   if cap <= 0: return
-  let catalog = ensureCatalog()
   let q = query.toLowerAscii
   var seen: seq[string]
   for s in skip:
@@ -311,14 +329,14 @@ proc searchCatalogModels*(providers: openArray[string], query: string,
   var acc: seq[CatalogModel]
   proc take(p: string) =
     if acc.len >= cap: return
-    let models = catalog.getOrDefault(p).getOrDefault("models")
-    if models.isNil or models.kind != JObject: return
-    for key, node in models:
+    let provider = p.toLowerAscii
+    for entry in catalogIndex():
       if acc.len >= cap: return
-      if q notin key.toLowerAscii: continue
-      if key.toLowerAscii in seen: continue
-      seen.add key.toLowerAscii
-      acc.add modelFromNode(p, key, node)
+      if entry.provider != provider or q notin entry.idLower: continue
+      if entry.idLower in seen: continue
+      seen.add entry.idLower
+      acc.add CatalogModel(provider: entry.provider, id: entry.id,
+        context: entry.context)
   for p in orderedProviders(providers, prefer):
     take(p)
   acc

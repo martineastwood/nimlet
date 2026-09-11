@@ -2,7 +2,7 @@
 
 import std/[json, os, strutils, times]
 import nimgent
-import nimterm/[canvas, events, geometry, keys, style, theme, transcript, widget, widgets]
+import nimterm/[canvas, events, geometry, keys, style, theme, widget, widgets]
 import ../commands
 import ../config
 import ../session
@@ -26,6 +26,9 @@ type
     notice*: string
     noticeUntil*: float
     footer*: string
+    themeName: string
+    appliedThemeRevision: int
+    stylesReady: bool
 const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 method focusable*(screen: NimtermScreen): bool = true
 
@@ -84,7 +87,8 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
       cursorBarStyle = cursorBarStyle),
     workspace: workspace,
     sessionDir: sessionDir,
-    modelPicker: modelPicker)
+    modelPicker: modelPicker, themeName: t.name,
+    appliedThemeRevision: -1)
   result.transcript.toolDetails = proc (name: string, input: JsonNode,
                                         output: string): seq[string] =
     let hunk = formatToolHunk(name, input, true, parseHunkSpans(output))
@@ -125,7 +129,7 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
           text.add "[file]"
         else:
           discard
-      if text.len > 0: screen.transcript.transcript.appendUser(text)
+      if text.len > 0: screen.transcript.appendUser(text)
     of sekAssistant:
       screen.transcript.apply AgentUiEvent(kind: ueStepStarted, runId: runId,
         step: step, model: event.model)
@@ -150,8 +154,7 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
         step: step, toolId: event.toolId, toolOutput: event.toolOutput,
         isError: event.toolError)
     of sekCompaction:
-      screen.transcript.transcript.items.add TranscriptItem(kind: tikStatus,
-        text: "Context compacted")
+      screen.transcript.appendStatus("Context compacted")
     of sekName:
       discard
     of sekSelection:
@@ -160,8 +163,14 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
     step: max(0, step - 1))
 
 proc refreshMenu(screen: NimtermScreen) =
-  let suggestions = commandSuggestions(screen.composer.text, screen.workspace,
-    screen.sessionDir, screen.modelPicker, screen.composer.cursor)
+  let input = screen.composer.text
+  let hasSuggestions = input.strip.startsWith("/") or
+    mentionAt(input, screen.composer.cursor).active
+  let suggestions = if hasSuggestions:
+    commandSuggestions(input, screen.workspace, screen.sessionDir,
+      screen.modelPicker, screen.composer.cursor)
+  else:
+    @[]
   screen.menu.items.setLen(0)
   for suggestion in suggestions:
     screen.menu.items.add MenuItem(label: suggestion,
@@ -176,6 +185,13 @@ proc refreshMenu(screen: NimtermScreen) =
 
 proc refreshMenuTheme(screen: NimtermScreen) =
   let t = currentTheme
+  if screen.stylesReady and screen.appliedThemeRevision == themeRevision:
+    return
+  if screen.themeName != t.name or screen.appliedThemeRevision != themeRevision:
+    screen.transcript.invalidateLines()
+    screen.themeName = t.name
+  screen.appliedThemeRevision = themeRevision
+  screen.stylesReady = true
   screen.header.style = t.themedStyle(t.text, t.panelBg)
   screen.header.borderStyle = t.themedStyle(t.selectedFg, t.accent, {attrBold})
   screen.header.titleStyle = screen.header.borderStyle

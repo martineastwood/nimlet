@@ -122,6 +122,7 @@ proc makeEditTool*(ws: Workspace): (ToolDefinition, ToolProc) =
       return ToolResult(output: msg, isError: true)
 
     writeFileAtomic(resolved, applied.text)
+    clearMentionFileCache(ws.root)
     let newVersion = hashContent(applied.text)
     var outp = fmt"OK — {ws.relative(resolved)}" & "\n" &
                fmt"version: {newVersion}"

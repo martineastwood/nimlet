@@ -38,6 +38,7 @@ proc makeWriteTool*(ws: Workspace): (ToolDefinition, ToolProc) =
     if dir.len > 0: createDir(dir)
 
     writeFileAtomic(resolved, content)
+    clearMentionFileCache(ws.root)
     let version = hashContent(content)
     return ToolResult(
       output: fmt"OK — wrote {ws.relative(resolved)}" & "\n" & fmt"version: {version}",

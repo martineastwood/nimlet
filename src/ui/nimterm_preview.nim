@@ -17,7 +17,9 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
   screen.replaySession(agent.session)
   let backend = newPosixBackend()
   var app = newApp(backend, screen)
-  app.minFrameIntervalMs = 50
+  ## Keep streamed output bounded to a smooth 60 FPS while keyboard events
+  ## bypass this budget in App.step.
+  app.minFrameIntervalMs = 16
   let controller = newNimletController(screen, addr app, addr agent)
   app.backend.init()
   defer: app.backend.shutdown()
@@ -27,6 +29,9 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
     screen.composer.setText(initialPrompt)
     controller.handleAction(app, screen.submit().action)
   while app.running:
-    if not app.step(100) and screen.notice.len > 0:
+    if not app.step(if screen.busy: 16 else: 100) and
+        (screen.notice.len > 0 or screen.busy):
       app.invalidate()
-      app.flush(true)
+    ## step() returns before flushing when the backend had no event. Flush here
+    ## so dirty status/footer changes are not held until the next keypress.
+    app.flush()

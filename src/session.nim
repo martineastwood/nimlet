@@ -55,8 +55,19 @@ type
     name*: string         ## /name if set
     workspace*: string
 
+  SessionListCache = object
+    sessionDir: string
+    workspace: string
+    limit: int
+    sessions: seq[SessionInfo]
+
 const
   sessionListLimit* = 20  ## picker / tab-complete; explicit /resume ID is uncapped
+
+var sessionListCaches: seq[SessionListCache]
+
+proc clearSessionListCache*() =
+  sessionListCaches.setLen(0)
 
 proc validSessionId*(id: string): bool =
   if id.len == 0: return false
@@ -321,6 +332,7 @@ proc append*(session: var Session, event: SessionEvent) =
   persistSessionFile(file)
   session.needsNewline = false
   session.events.add event
+  clearSessionListCache()
 
 proc addUserMessage*(session: var Session, content: string) =
   session.append SessionEvent(kind: sekUser, message: userMessage(content))
@@ -522,6 +534,16 @@ proc listSessions*(sessionDir: string, workspace = "",
     result.add info
     if limit > 0 and result.len >= limit:
       break
+
+proc listSessionsCached*(sessionDir: string, workspace = "",
+                         limit = sessionListLimit): seq[SessionInfo] =
+  for entry in sessionListCaches:
+    if entry.sessionDir == sessionDir and entry.workspace == workspace and
+        entry.limit == limit:
+      return entry.sessions
+  result = listSessions(sessionDir, workspace, limit)
+  sessionListCaches.add SessionListCache(sessionDir: sessionDir,
+    workspace: workspace, limit: limit, sessions: result)
 
 proc sessionLabel*(info: SessionInfo, now = getTime()): string =
   let title = if info.name.len > 0: info.name else: info.preview

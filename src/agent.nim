@@ -223,6 +223,8 @@ proc emitAgentEvent(ui: TurnSink, event: NimletEvent) =
   if not ui.agentEvent.isNil: ui.agentEvent(event)
 
 proc rescanPlugins(agent: var Agent, ui: TurnSink) =
+  clearSkillCache()
+  clearMentionFileCache()
   agent.reloadToolsAndHooks()
   reportLines(ui, mlWarn, agent.discoveryWarningLines)
 

@@ -1,6 +1,6 @@
 ## Nimlet terminal controller: turns, actions, interactions, and recovery.
 
-import std/[asyncdispatch, times]
+import std/[asyncdispatch, posix, times]
 import nimgent
 import nimterm/[app, events, keys, transcript, widget, widgets]
 import nimterm/term
@@ -29,6 +29,7 @@ type
     questionFuture: Future[QuestionAnswer]
     approvalToolId: string
     approvalFuture: Future[PermissionDecision]
+    cancelRead, cancelWrite: cint
 proc pumpAsyncDispatcher*() =
   if hasPendingOperations(): asyncdispatch.poll(0)
 
@@ -52,12 +53,32 @@ method needsPolling(source: NimletTurnSource): bool = not source.active.isNil
 proc newNimletTurnSource*(active: Future[bool] = nil): NimletTurnSource =
   NimletTurnSource(id: "agent-turn", active: active)
 
+proc drainCancelPipe(controller: NimletController) =
+  if controller.cancelRead < 0: return
+  var bytes: array[64, char]
+  while posix.read(controller.cancelRead, bytes.addr, bytes.len) > 0:
+    discard
+
+proc signalCancel(controller: NimletController) =
+  if controller.cancelWrite < 0: return
+  var byte = '\1'
+  discard posix.write(controller.cancelWrite, byte.addr, 1)
+
+proc requestInterrupt(controller: NimletController) =
+  controller.interruptRequested = true
+  controller.signalCancel()
+  controller.screen.activity = "Stopping…"
+  controller.screen.footer = controller.screen.workingFooter("Stopping…")
+
 proc previewSink(controller: NimletController): TurnSink =
   let screen = controller.screen
   let app = controller.app
   let agent = controller.agent
   var runId = ""
   var step = -1
+  var pendingDelta: NimletEvent
+  var hasPendingDelta = false
+  var lastDeltaFlush = 0.0
   proc refresh(force = true) =
     let status = if screen.activity.len > 0:
       screen.activity & "  " & agent[].statusFooter
@@ -66,20 +87,39 @@ proc previewSink(controller: NimletController): TurnSink =
     screen.footer = if screen.busy: screen.workingFooter(status) else: status
     app[].invalidate()
     app[].flush(force)
+  proc flushPendingDelta() =
+    if not hasPendingDelta: return
+    screen.transcript.apply(pendingDelta.toAgentUiEvent)
+    hasPendingDelta = false
+    lastDeltaFlush = epochTime()
   proc send(event: NimletEvent) =
     let uiEvent = event.toAgentUiEvent
     if uiEvent.kind == ueRunStarted: runId = uiEvent.runId
     if uiEvent.kind == ueStepStarted: step = uiEvent.step
+    if event.kind in {neTextDelta, neThinkingDelta}:
+      if hasPendingDelta and (pendingDelta.kind != event.kind or
+          pendingDelta.runId != event.runId or pendingDelta.step != event.step or
+          pendingDelta.model != event.model):
+        flushPendingDelta()
+      if not hasPendingDelta:
+        pendingDelta = event
+        hasPendingDelta = true
+      else:
+        pendingDelta.text.add event.text
+      if lastDeltaFlush == 0.0 or epochTime() - lastDeltaFlush >= 0.016:
+        flushPendingDelta()
+        refresh(false)
+      return
+    flushPendingDelta()
     screen.transcript.apply(uiEvent)
-    refresh(uiEvent.kind notin {ueTextDelta, ueThinkingDelta})
+    refresh()
   result = TurnSink(
     emit: proc (level: MsgLevel, text: string) =
       if level == mlError:
         screen.transcript.apply AgentUiEvent(kind: ueError, runId: runId,
           error: text)
       else:
-        screen.transcript.transcript.items.add TranscriptItem(kind: tikStatus,
-          text: text)
+        screen.transcript.appendStatus(text)
       refresh(),
     render: proc () = refresh(),
     onChange: proc () = refresh(),
@@ -127,7 +167,7 @@ proc previewSink(controller: NimletController): TurnSink =
       controller.interruptRequested,
     noteInterrupted: proc () = discard,
     showSession: proc (session: Session) =
-      screen.transcript.transcript = newTranscript()
+      screen.transcript.setTranscript(newTranscript())
       screen.replaySession(session)
       refresh(),
     generate: proc (provider: Provider,
@@ -168,7 +208,7 @@ proc resetInteraction(controller: NimletController) =
   screen.activity = ""
   screen.modelPicker = modelPickerFrom(controller.agent[])
   screen.footer = controller.agent[].statusFooter
-  controller.app[].focus(screen.composer)
+  controller.app[].focus(screen)
   controller.app[].invalidate()
 
 proc supervise*(controller: NimletController, future: Future[bool]) =
@@ -177,12 +217,13 @@ proc supervise*(controller: NimletController, future: Future[bool]) =
 
 proc startSubmission*(controller: NimletController, text: string) =
   let screen = controller.screen
+  controller.drainCancelPipe()
   screen.busy = true
   controller.interruptRequested = false
   screen.activity = "Thinking…"
   screen.spinnerStartedAt = epochTime()
   screen.footer = screen.workingFooter(controller.agent[].statusFooter)
-  screen.transcript.transcript.appendUser(text)
+  screen.transcript.appendUser(text)
   controller.turns.active = processInputAsync(controller.agent, text,
     controller.ui)
 
@@ -212,7 +253,7 @@ proc handleEvent*(controller: NimletController,
     controller.resetInteraction()
     return eventHandled
   if controller.screen.busy and event.kind == uiKey and event.key == keyCtrlC:
-    controller.interruptRequested = true
+    controller.requestInterrupt()
     if not controller.questionFuture.isNil and
         not controller.questionFuture.finished:
       controller.questionFuture.complete QuestionAnswer(selected: -1,
@@ -256,7 +297,7 @@ proc handleAction*(controller: NimletController, running: var App,
     of "queue": controller.queuedInput = action.value
     of "queue-mode-toggle":
       controller.modeSwitchPending = not controller.modeSwitchPending
-    of "interrupt": controller.interruptRequested = true
+    of "interrupt": controller.requestInterrupt()
     of "submit": controller.startSubmission(action.value)
     else: discard
   else: discard
@@ -265,8 +306,15 @@ proc handleAction*(controller: NimletController, running: var App,
 proc newNimletController*(screen: NimtermScreen, app: ptr App,
                            agent: ptr Agent): NimletController =
   result = NimletController(screen: screen, app: app, agent: agent,
-    turns: newNimletTurnSource())
+    turns: newNimletTurnSource(), cancelRead: -1, cancelWrite: -1)
+  var fds: array[2, cint]
+  if posix.pipe(fds) == 0:
+    result.cancelRead = fds[0]
+    result.cancelWrite = fds[1]
+    discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
+    discard fcntl(result.cancelWrite, F_SETFL, O_NONBLOCK)
   let controller = result
+  screen.footer = agent[].statusFooter
   result.ui = previewSink(result)
   result.turns.onFinish = proc (keepRunning, succeeded: bool) =
     controller.finishTurn(keepRunning, succeeded)
@@ -275,6 +323,14 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
     controller.handleEvent(event)
   app[].onAction = proc (running: var App, action: UiAction) =
     controller.handleAction(running, action)
+
+proc close*(controller: NimletController) =
+  if controller.cancelRead >= 0:
+    discard posix.close(controller.cancelRead)
+    controller.cancelRead = -1
+  if controller.cancelWrite >= 0:
+    discard posix.close(controller.cancelWrite)
+    controller.cancelWrite = -1
 
 proc busy*(controller: NimletController): bool = controller.screen.busy
 

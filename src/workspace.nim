@@ -79,6 +79,18 @@ const
   skipDirNames = [".git", "node_modules", "nimbledeps", "nimcache", "dist",
                   "build", ".cache", "target", ".next", ".turbo"]
 
+type
+  MentionPath = object
+    path: string
+    lower: string
+    baseLower: string
+
+  MentionIndex = object
+    root: string
+    paths: seq[MentionPath]
+
+var mentionIndexes: seq[MentionIndex]
+
 proc canonRel*(path: string): string =
   path.replace('\\', '/')
 
@@ -164,25 +176,36 @@ proc mentionDirsOf(files: seq[string]): seq[string] =
         result.add entry
       dir = dir.parentDir
 
-proc delItem(items: var seq[string], item: string) =
-  let i = items.find(item)
-  if i >= 0: items.delete(i)
+proc clearMentionFileCache*(root = "") =
+  if root.len == 0:
+    mentionIndexes.setLen(0)
+    return
+  for i in countdown(mentionIndexes.high, 0):
+    if mentionIndexes[i].root == root: mentionIndexes.delete(i)
+
+proc mentionPaths(root: string): seq[MentionPath] =
+  for entry in mentionIndexes:
+    if entry.root == root:
+      return entry.paths
+  let files = listWorkspaceFiles(root)
+  for f in files:
+    result.add MentionPath(path: f, lower: f.toLowerAscii,
+      baseLower: f.extractFilename.toLowerAscii)
+  for d in mentionDirsOf(files):
+    result.add MentionPath(path: d, lower: d.toLowerAscii,
+      baseLower: d.extractFilename.toLowerAscii)
+  result.sort(proc(a, b: MentionPath): int = cmp(a.path, b.path))
+  mentionIndexes.add MentionIndex(root: root, paths: result)
 
 proc suggestMentionFiles*(root, query: string, cap = mentionFileCap): seq[string] =
   let q = query.toLowerAscii
-  let files = listWorkspaceFiles(root)
-  var paths = files
-  for d in mentionDirsOf(files):    ## folders are suggestions too (@examples/)
-    paths.add d
-  paths.sort()
-  if q.len > 0:
-    paths.delItem(q)                ## completing "@src/" should not re-suggest itself
+  let paths = mentionPaths(root)
   var seen: seq[string]
   for f in paths:
     if result.len >= cap: break
-    let base = f.extractFilename.toLowerAscii
-    if q.len == 0 or base.startsWith(q):
-      let mention = "@" & f
+    if f.lower == q: continue         ## completing "@src/" should not re-suggest itself
+    if q.len == 0 or f.baseLower.startsWith(q):
+      let mention = "@" & f.path
       var dup = false
       for x in seen:
         if x == mention: dup = true
@@ -192,8 +215,9 @@ proc suggestMentionFiles*(root, query: string, cap = mentionFileCap): seq[string
   if q.len == 0 or result.len >= cap: return
   for f in paths:
     if result.len >= cap: return
-    if q notin f.toLowerAscii: continue
-    let mention = "@" & f
+    if f.lower == q: continue
+    if q notin f.lower: continue
+    let mention = "@" & f.path
     var dup = false
     for x in seen:
       if x == mention: dup = true

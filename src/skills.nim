@@ -16,6 +16,12 @@ type
     description*: string
     path*: string
 
+  SkillCacheEntry = object
+    workspace: string
+    skills: seq[SkillMetadata]
+
+var skillCache: seq[SkillCacheEntry]
+
 proc readMetadata(path: string): SkillMetadata =
   result.path = path
   result.name = path.parentDir.splitPath.tail
@@ -56,7 +62,7 @@ proc readMetadata(path: string): SkillMetadata =
          not stripped.startsWith("#"):
       result.description = stripped
 
-proc discoverSkills*(workspace: string): seq[SkillMetadata] =
+proc discoverSkillsUncached(workspace: string): seq[SkillMetadata] =
   ## Later roots override the same skill name: global → `.agent` → `.nimlet`.
   for dir in collectPluginDirs(workspace, "skills", "SKILL.md"):
     let skill = readMetadata(dir / "SKILL.md")
@@ -65,6 +71,17 @@ proc discoverSkills*(workspace: string): seq[SkillMetadata] =
   result.sort(proc(a, b: SkillMetadata): int =
     let byName = cmp(a.name.toLowerAscii, b.name.toLowerAscii)
     if byName != 0: byName else: cmp(a.path, b.path))
+
+proc discoverSkills*(workspace: string): seq[SkillMetadata] =
+  let key = if dirExists(workspace): expandFilename(workspace) else: workspace
+  for entry in skillCache:
+    if entry.workspace == key:
+      return entry.skills
+  result = discoverSkillsUncached(workspace)
+  skillCache.add SkillCacheEntry(workspace: key, skills: result)
+
+proc clearSkillCache*() =
+  skillCache.setLen(0)
 
 proc skillMetadataPrompt*(workspace: string): string =
   let skills = discoverSkills(workspace)
