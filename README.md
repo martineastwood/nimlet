@@ -32,8 +32,8 @@ workspace and overlays `~/.nimlet/config.json`. Global files live in
 - `~/.nimlet/AGENTS.md` — personal instructions (all projects)
 - `~/.nimlet/skills/` — global skills
 - `~/.nimlet/prompts/` — global prompt templates
+- `~/.nimlet/extensions/` — global persistent extensions
 - `~/.nimlet/tools/` — global external tools
-- `~/.nimlet/hooks/` — global lifecycle hooks
 - `~/.nimlet/sessions/` — saved sessions
 - `~/.nimlet/models-dev.json` — cached model metadata
 
@@ -206,38 +206,89 @@ Type `/help` at any prompt to see these in the running app.
 Project instructions are loaded from `~/.nimlet/AGENTS.md`, then from
 `AGENTS.md` files between the repository root and the workspace. Passive
 skills can be placed in `.nimlet/skills/<name>/SKILL.md`,
-`.agent/skills/<name>/SKILL.md`, or `~/.nimlet/skills/<name>/SKILL.md`;
+`.agents/skills/<name>/SKILL.md`, `~/.nimlet/skills/<name>/SKILL.md`, or
+the portable `~/.agents/skills/<name>/SKILL.md` location;
 their metadata is advertised to the model and full bodies are loaded
 only through the `read_skill` tool. Type `/skill:<name>` (optionally followed by
 a request) to load a skill into the next turn. Built-in commands win when
 names collide.
 
 Prompt templates are non-recursive Markdown files in `prompts/` under the same
-three roots. The filename becomes a bare slash command: `prompts/review.md`
+Nimlet and portable `.agents` roots. The filename becomes a bare slash command: `prompts/review.md`
 registers `/review`. Optional frontmatter may set `description`; `$ARGUMENTS`
 and `$@` in the body expand to the text following the command. Built-in commands
 win when names collide. Use prompt templates for short reusable requests and
 skills for model-visible procedures that may include supporting files.
 
-External tools are discovered the same way under `tools/` instead of
+Legacy external tools are discovered the same way under `tools/` instead of
 `skills/`: `~/.nimlet/tools/`, `<workspace>/.agent/tools/`, then
 `<workspace>/.nimlet/tools/` (later roots override the same name). Each
 child directory needs a `tool.json` and an executable; the agent reads
 manifests at startup and only spawns the process when the model calls the
-tool. Built-in tool names always win over extensions. Tools and hooks are
+tool. Built-in tool names always win over extensions. Tools and extensions are
 rescanned on `/reload`, `/new`, and `/resume` (as well as process start).
 `/reload` keeps the current session; skills and `AGENTS.md` are already
 read from disk on every turn.
 
-Lifecycle hooks use the same discovery layout under `hooks/` with a
-`hook.json` per child directory. Supported events: `pre_tool_call`,
-`post_tool_call`, `session_start`, `session_end`, `pre_compact`,
-`post_compact`, `turn_start`, `turn_end`. Hooks are ephemeral JSON
-processes (stdin in, JSON out). Failures are fail-open (warn and
-continue); only an explicit `{"allow": false}` from `pre_tool_call` or
-`pre_compact` blocks. `pre_tool_call` may return rewritten `arguments`;
-`post_tool_call` may return rewritten `output` / `is_error`;
-`pre_compact` may return an extra `instruction`. Later roots override
-the same hook `name`. Opening nimlet fires `session_start`; `/new` and
-`/resume` fire `session_end` then `session_start`; clean exit fires
-`session_end`. Each model turn fires `turn_start` / `turn_end`.
+Persistent extensions subscribe with an `events` array in their `register`
+response. Supported events are `tool_call`, `tool_result`, `session_start`,
+`session_end`, `session_before_compact`, `session_compact`, `turn_start`, and
+`turn_end`. Event responses may deny an action, rewrite tool arguments/results,
+append compaction instructions, or provide a complete custom compaction.
+Failures are fail-open and reported as warnings. The old `hook.json` process
+model is not loaded.
+
+Compiled-in extensions may persist namespaced JSON state with
+`Session.addExtensionEntry(name, data)` and recover it with
+`Session.extensionEntries(name)`. These entries stay in the append-only session
+log but are not sent to the model or counted as conversation context.
+
+Persistent extensions are language-neutral executables discovered from
+`extensions/<name>/extension.json` under global or project `.agents` and
+`.nimlet` roots. Nimlet sends one `initialize` JSON line and expects a
+`register` response:
+
+```json
+{"name":"hello","command":["./extension.py"],"response_timeout_seconds":120}
+```
+
+```json
+{"type":"register","commands":[{"name":"hello","description":"Say hello"}],"events":["turn_start"]}
+```
+
+Invoking `/hello world` sends a `command` request with `name`, `arguments`, and
+a correlation `id`. A matching `response` may contain `message` for immediate
+display or `prompt` to start a model turn. Extensions block on stdin between
+events, so they require no polling or idle CPU. `/reload` stops and restarts
+them; clean Nimlet exit sends `shutdown`.
+
+`response_timeout_seconds` defaults to 30, accepts a positive integer, and may
+be `null` for no timeout. The same asynchronous request path is used for
+commands and tools, so long-running extensions keep the UI responsive.
+
+Any response may also carry host actions:
+
+```json
+{
+  "type": "response",
+  "id": "7",
+  "status": {"key": "state", "text": "3 subagents running"},
+  "widget": {"key": "agents", "lines": ["✓ research", "… tests"]},
+  "notification": {"level": "info", "message": "Research complete"},
+  "entry": {"completed": ["research"]}
+}
+```
+
+Status and widget keys are automatically namespaced to the extension. Returning
+an empty status `text` or empty widget `lines` clears that item. `entry` is
+appended to the session under the extension's name and never enters model
+context.
+
+While handling a request, an extension may ask the user and then continue:
+
+```json
+{"type":"ui_request","id":"q1","method":"question","prompt":"Environment?","options":["staging","production"]}
+```
+
+Nimlet replies with `{"type":"ui_response","id":"q1","answer":"staging","cancelled":false}`.
+Time spent waiting for the user does not count against the response timeout.

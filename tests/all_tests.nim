@@ -32,6 +32,7 @@ import nimgent
 import nimgent/providers/[anthropic, openrouter]
 import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
 import ../src/extensions
+import ../src/extension_runtime
 import ../src/hooks
 import ../src/main
 import ../src/rpc
@@ -732,6 +733,17 @@ suite "bash tool":
       check posix.kill(Pid(child), 0) != 0
 
 suite "session":
+  test "extension entries persist without entering model context":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "extension.jsonl"
+    var session = initSession(path, "extension")
+    session.addUserMessage("hello")
+    session.addExtensionEntry("counter", %*{"turns": 1})
+    let loaded = initSession(path, "extension")
+    check loaded.extensionEntries("counter") == @[%*{"turns": 1}]
+    check loaded.messagesForModel.len == 1
+
   test "JSONL round trip and partial final line recovery":
     let root = freshDir()
     defer: removeDir(root)
@@ -1722,6 +1734,15 @@ suite "slash commands":
     check expandPrompt(root, cmd) == "Review src/foo.nim carefully."
     check commandSuggestionDescription("/review", root) == "Review a target."
 
+  test "discovers portable project .agents prompts":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".agents" / "prompts")
+    writeFile(root / ".agents" / "prompts" / "portable.md", "Shared $@.")
+    check "/portable" in commandSuggestions("/port", root)
+    check expandPrompt(root, parseSlash("/portable request", root)) ==
+      "Shared request."
+
   test "malformed commands remain visible to validation":
     check parseSlash("/model refresh").kind == slError
     check "/models refresh" in commandSuggestions("/model refresh")
@@ -1875,6 +1896,15 @@ suite "project instructions and skills":
       if skill.name == "review":
         desc = skill.description
     check desc == "From .nimlet."
+
+  test "discovers portable project .agents skills":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".agents" / "skills" / "portable")
+    writeFile(root / ".agents" / "skills" / "portable" / "SKILL.md",
+      "---\nname: portable\ndescription: Shared skill.\n---\n")
+    clearSkillCache()
+    check "/skill:portable" in commandSuggestions("/skill:", root)
 
   test "agent request contains instructions and skill metadata":
     let root = freshDir()
@@ -2982,7 +3012,136 @@ suite "external tools":
     check "not valid JSON" in result.output
     check "not-json-at-all" in result.output
 
-suite "lifecycle hooks":
+suite "persistent extensions":
+  test "registers and invokes a slash command over JSONL":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "hello")
+    let dir = root / ".nimlet" / "extensions" / "hello"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "hello", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[{"name":"hello","description":"Say hello"}]}'
+while read line; do
+  case "$line" in
+    *\"type\":\"shutdown\"*) exit 0 ;;
+    *) echo '{"type":"response","id":"1","message":"Hello from extension"}' ;;
+  esac
+done
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    check "/hello" in commandSuggestions("/he", root)
+    var messages: seq[string]
+    var ui = consoleSink()
+    ui.emit = proc (level: MsgLevel, text: string) = messages.add text
+    check agent.processInput("/hello world", ui)
+    check messages == @["Hello from extension"]
+
+  test "registers tools and accepts unlimited response time":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "echo")
+    let dir = root / ".nimlet" / "extensions" / "echo"
+    writeFile(dir / "extension.json", $(%*{"name": "echo",
+      "command": ["./extension.sh"], "response_timeout_seconds": nil}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[],"tools":[{"name":"ext_echo","description":"Echo through the extension","input_schema":{"type":"object"}}]}'
+read request
+echo '{"type":"response","id":"1","content":"extension tool result","is_error":false}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    let output = waitFor agent.tools.execute("ext_echo", %*{})
+    check not output.isError
+    check output.output == "extension tool result"
+
+  test "subscribed lifecycle events mutate tools and replace compaction":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "lifecycle")
+    let dir = root / ".nimlet" / "extensions" / "lifecycle"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "lifecycle", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[],"events":["tool_call","session_before_compact"]}'
+read tool_event
+echo '{"type":"response","id":"1","arguments":{"command":"changed"}}'
+read compact_event
+echo '{"type":"response","id":"2","compaction":{"summary":"extension summary","first_kept_index":1,"details":{"model":"cheap"}},"status":{"key":"state","text":"extension ready"},"widget":{"key":"work","lines":["subagent complete"]},"notification":{"level":"info","message":"custom compaction done"},"entry":{"count":1}}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    let pre = waitFor agent.extensionRuntime.dispatch(hePreToolCall,
+      preToolPayload("bash", %*{"command": "original"}))
+    check pre.arguments["command"].getStr == "changed"
+    agent.session.addUserMessage("old context")
+    var notices: seq[string]
+    var ui = consoleSink()
+    ui.emit = proc (level: MsgLevel, text: string) = notices.add text
+    let compacted = waitFor (addr agent).runCompaction(ui = ui)
+    check compacted.didCompact
+    check compacted.summary == "extension summary"
+    check agent.session.latestCompaction.found
+    check agent.session.events[^1].compactionDetails["model"].getStr == "cheap"
+    check "extension ready" in agent.statusFooter
+    check agent.extensionRuntime.widgetLines == @["subagent complete"]
+    check notices == @["custom compaction done"]
+    check agent.session.extensionEntries("lifecycle") == @[%*{"count": 1}]
+
+  test "extension requests a user answer before completing":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "question")
+    let dir = root / ".nimlet" / "extensions" / "question"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "question", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[{"name":"choose","description":"Choose"}]}'
+read command
+echo '{"type":"ui_request","id":"q1","method":"question","prompt":"Pick one","options":["Red","Blue"]}'
+read answer
+echo '{"type":"response","id":"1","message":"choice received"}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    var asked = false
+    var messages: seq[string]
+    var ui = consoleSink()
+    ui.question = proc(prompt: string,
+        options: seq[QuestionOption]): Future[QuestionAnswer] {.async.} =
+      asked = prompt == "Pick one" and options.len == 2 and
+        options[1].label == "Blue"
+      return QuestionAnswer(text: "Blue")
+    ui.emit = proc(level: MsgLevel, text: string) = messages.add text
+    check agent.processInput("/choose", ui)
+    check asked
+    check messages == @["choice received"]
+
+when false: # Removed hook.json regression suite; persistent extensions supersede it.
   test "plan mode suppresses command hooks while act mode restores them":
     let root = freshDir()
     defer: removeDir(root)

@@ -11,7 +11,8 @@ import tools/tool
 
 const
   DefaultTimeout* = 30
-  BuiltinToolNames* = ["bash", "edit", "glob", "grep", "read", "read_skill", "write"]
+  BuiltinToolNames* = ["ask_user", "bash", "edit", "glob", "grep", "read",
+    "read_skill", "write"]
 
 type
   ExtensionTool* = object

@@ -7,6 +7,7 @@ import events
 import workspace
 import images
 import extensions, hooks
+import extension_runtime
 import nimgent
 import nimgent/providers/[anthropic, google, openai]
 import tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
@@ -74,11 +75,9 @@ type
     permissions*: PermissionPolicy
     tools*: ToolRegistry
     planTools: ToolRegistry
-    hooks*: seq[Hook]
     ## Startup warnings from extension discovery (invalid manifests, collisions).
     extensionWarnings*: seq[string]
-    ## Startup warnings from hook discovery (invalid manifests).
-    hookWarnings*: seq[string]
+    extensionRuntime*: ExtensionRuntime
 
 proc sessionTotals*(agent: Agent): tuple[usage: Usage, cost: float, priced: bool] =
   ## Usage and USD cost summed over every assistant response in the session.
@@ -137,6 +136,8 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
     add t.paint(t.warning, "web")
   elif agent.config.webSearch:
     add t.paint(t.dim, "web:n/a")
+  for status in agent.extensionRuntime.statusTexts:
+    add t.paint(t.accent, status)
   parts.join(" · ")
 
 proc statsReport(agent: Agent): string =
@@ -208,7 +209,7 @@ proc restoreSessionModel(agent: var Agent) =
     agent.applyModel(storedModel, persist = false)
 
 proc reloadToolsAndHooks*(agent: var Agent) =
-  ## Rescan external tools and hooks from disk (builtins stay the same set).
+  ## Rescan tools and restart persistent extensions.
   var reg: ToolRegistry
   let ws = initWorkspace(agent.config.workspace)
   let read = makeReadTool(ws)
@@ -236,16 +237,21 @@ proc reloadToolsAndHooks*(agent: var Agent) =
   reg.register(askUser[0], askUser[1])
   agent.extensionWarnings = reg.registerExtensions(
     agent.config.workspace, agent.config.maxToolOutputBytes)
+  agent.extensionRuntime.stop()
+  agent.extensionRuntime = startExtensions(agent.config.workspace, agent.session.id)
+  agent.extensionRuntime.registerTools(reg)
   agent.tools = reg
-  let discovered = discoverHooks(agent.config.workspace)
-  agent.hooks = discovered.hooks
-  agent.hookWarnings = discovered.warnings
+  var commands: seq[ExtensionCommandInfo]
+  for command in agent.extensionRuntime.commands:
+    commands.add ExtensionCommandInfo(name: command.name,
+      description: command.description)
+  setExtensionCommands(commands)
 
 proc discoveryWarningLines*(agent: Agent): seq[string] =
   for warning in agent.extensionWarnings:
     result.add "extension: " & warning
-  for warning in agent.hookWarnings:
-    result.add "hook: " & warning
+  for warning in agent.extensionRuntime.warnings:
+    result.add warning
 
 proc reportLines(ui: TurnSink, level: MsgLevel, lines: openArray[string],
                  prefix = "") =
@@ -255,6 +261,30 @@ proc reportLines(ui: TurnSink, level: MsgLevel, lines: openArray[string],
       ui.emit(level, text)
     else:
       stderr.writeLine text
+
+proc applyExtensionActions(agent: ptr Agent, ui: TurnSink) =
+  for entry in agent.extensionRuntime.takeEntries:
+    agent[].session.addExtensionEntry(entry.extension, entry.data)
+  for notice in agent.extensionRuntime.takeNotices:
+    let level = case notice.level.toLowerAscii
+      of "error": mlError
+      of "warning", "warn": mlWarn
+      else: mlPlain
+    if not ui.emit.isNil: ui.emit(level, notice.message)
+    else: stderr.writeLine notice.message
+  if not ui.onChange.isNil: ui.onChange()
+
+proc bindExtensionUi(agent: ptr Agent, ui: TurnSink) =
+  if agent.extensionRuntime.isNil: return
+  if ui.question.isNil:
+    agent.extensionRuntime.question = nil
+    return
+  agent.extensionRuntime.question = proc(prompt: string,
+      options: seq[string]): Future[string] {.async.} =
+    var choices: seq[QuestionOption]
+    for option in options: choices.add QuestionOption(label: option)
+    let answer = await ui.question(prompt, choices)
+    if not answer.cancelled: result = answer.text
 
 proc emitAgentEvent(ui: TurnSink, event: NimletEvent) =
   if not ui.agentEvent.isNil: ui.agentEvent(event)
@@ -344,12 +374,11 @@ proc compactionPoll(ui: TurnSink): StreamCallback =
 
 proc runLifecycle(agent: ptr Agent, event: HookEvent, payload: JsonNode,
                   ui: TurnSink, toolName = ""): Future[HookOutcome] {.async.} =
+  discard toolName
   if agent.mode == modePlan: return HookOutcome(allowed: true)
-  result = await runHooks(agent.hooks, event, payload, agent.config.workspace,
-    toolName, agent.config.maxToolOutputBytes, proc (): bool =
-      if not ui.poll.isNil: ui.poll()
-      not ui.wasInterrupted.isNil and ui.wasInterrupted())
-  reportLines(ui, mlWarn, result.warnings, "hook: ")
+  result = await agent.extensionRuntime.dispatch(event, payload)
+  agent.applyExtensionActions(ui)
+  reportLines(ui, mlWarn, result.warnings)
 
 proc runCompaction*(agent: ptr Agent, instruction = "",
                     onEvent: StreamCallback = nil,
@@ -358,7 +387,7 @@ proc runCompaction*(agent: ptr Agent, instruction = "",
   var instruction = instruction
   let pre = await agent.runLifecycle(hePreCompact,
     preCompactPayload(agent.session.id, agent.config.workspace, instruction,
-      tokensBefore), ui)
+      tokensBefore, agent.session.entriesJson), ui)
   if not pre.allowed:
     result.message = if pre.reason.len > 0: pre.reason else: "blocked by hook"
     return
@@ -367,16 +396,24 @@ proc runCompaction*(agent: ptr Agent, instruction = "",
       instruction = instruction & "\n" & pre.instruction
     else:
       instruction = pre.instruction
-  try:
-    result = prepareAndCompact(
-      agent.session,
-      agent.provider,
-      agent.config.model,
-      agent.config.keepRecentTokens,
-      instruction,
-      onEvent)
-  except CatchableError as e:
-    result.message = "Compaction failed: " & e.msg
+  if pre.hasCompaction and pre.firstKeptIndex >= 0 and
+      pre.firstKeptIndex <= agent.session.events.len:
+    agent[].session.addCompaction(pre.summary, pre.firstKeptIndex, tokensBefore,
+      pre.details)
+    result = CompactionResult(didCompact: true, summary: pre.summary,
+      firstKeptIndex: pre.firstKeptIndex, tokensBefore: tokensBefore,
+      message: "Compacted by extension.")
+  else:
+    try:
+      result = prepareAndCompact(
+        agent.session,
+        agent.provider,
+        agent.config.model,
+        agent.config.keepRecentTokens,
+        instruction,
+        onEvent)
+    except CatchableError as e:
+      result.message = "Compaction failed: " & e.msg
   discard await agent.runLifecycle(hePostCompact,
     postCompactPayload(agent.session.id, agent.config.workspace,
       result.didCompact, result.summary, result.firstKeptIndex,
@@ -406,10 +443,10 @@ proc fireTurnHooks(agent: ptr Agent, event: HookEvent, ui: TurnSink,
     turnPayload(agent.session.id, agent.config.workspace, interrupted), ui)
 
 proc switchSession(agent: ptr Agent, next: Session, ui: TurnSink): Future[void] {.async.} =
-  ## session_end on the old transcript, rescan tools/hooks, then session_start.
+  ## session_end on the old transcript, restart extensions, then session_start.
   await agent.fireSessionHooks(heSessionEnd, ui)
-  agent[].rescanPlugins(ui)
   agent[].session = next
+  agent[].rescanPlugins(ui)
   discard agent[].session.recoverInterruptedTools()
   await agent.fireSessionHooks(heSessionStart, ui)
 
@@ -624,9 +661,9 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
       ui.onChange()
   of slReload:
     agent[].rescanPlugins(ui)
-    ui.emit(mlOk, "Reloaded extensions, hooks, skills, and prompts.")
+    ui.emit(mlOk, "Reloaded extensions, tools, skills, and prompts.")
     ui.onChange()
-  of slQuit, slNone, slError, slSkill, slPrompt:
+  of slQuit, slNone, slError, slSkill, slPrompt, slExtension:
     discard
 
 proc emitAutoCompact(ui: TurnSink, res: CompactionResult) =
@@ -699,6 +736,9 @@ proc executeParallelReadOnly(agent: ptr Agent, call: ContentBlock,
   if post.hasIsError: result.isError = post.isError
 
 proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
+  agent.bindExtensionUi(ui)
+  defer:
+    if not agent.extensionRuntime.isNil: agent.extensionRuntime.question = nil
   let runId = (if agent.session.id.len > 0: agent.session.id else: "session") &
     ":turn:" & $agent.session.events.len
   let prompt = if agent.session.events.len > 0 and
@@ -926,6 +966,21 @@ proc processInputAsync*(agent: ptr Agent, input: string,
   let command = input.strip
   let cmd = parseSlash(command, agent.config.workspace)
   case cmd.kind
+  of slExtension:
+    try:
+      agent.bindExtensionUi(ui)
+      defer: agent.extensionRuntime.question = nil
+      let response = await agent[].extensionRuntime.invoke(cmd.extensionName, cmd.arg)
+      agent.applyExtensionActions(ui)
+      let message = response.getOrDefault("message").getStr
+      if message.len > 0: ui.emit(mlPlain, message)
+      let prompt = response.getOrDefault("prompt").getStr
+      if prompt.len > 0:
+        agent.session.addUserMessage(expandUserContent(agent.config.workspace, prompt))
+        await runTurnAsync(agent, ui)
+    except CatchableError as e:
+      ui.emit(mlError, "Extension command failed: " & e.msg)
+    return true
   of slNone, slSkill, slPrompt:
     if command.len == 0: return true
     discard agent.session.recoverInterruptedTools()
@@ -951,3 +1006,7 @@ proc processInputAsync*(agent: ptr Agent, input: string,
 
 proc processInput*(agent: var Agent, input: string, ui: TurnSink): bool =
   waitFor processInputAsync(addr agent, input, ui)
+
+proc stopExtensions*(agent: var Agent) =
+  agent.extensionRuntime.stop()
+  setExtensionCommands(@[])

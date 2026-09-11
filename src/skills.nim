@@ -63,11 +63,21 @@ proc readMetadata(path: string): SkillMetadata =
       result.description = stripped
 
 proc discoverSkillsUncached(workspace: string): seq[SkillMetadata] =
-  ## Later roots override the same skill name: global → `.agent` → `.nimlet`.
-  for dir in collectPluginDirs(workspace, "skills", "SKILL.md"):
-    let skill = readMetadata(dir / "SKILL.md")
-    if skill.name.len > 0:
-      result.overrideNamed(skill)
+  ## Project and Nimlet-specific roots override portable global skills.
+  let root = if dirExists(workspace): expandFilename(workspace) else: workspace
+  for skillsDir in [getHomeDir() / ".agents" / "skills",
+                    nimletConfigDir() / "skills",
+                    root / ".agent" / "skills",
+                    root / ".agents" / "skills",
+                    root / ".nimlet" / "skills"]:
+    if not dirExists(skillsDir): continue
+    var paths: seq[string]
+    for kind, path in walkDir(skillsDir):
+      if kind == pcDir and fileExists(path / "SKILL.md"): paths.add path
+    paths.sort()
+    for path in paths:
+      let skill = readMetadata(path / "SKILL.md")
+      if skill.name.len > 0: result.overrideNamed(skill)
   result.sort(proc(a, b: SkillMetadata): int =
     let byName = cmp(a.name.toLowerAscii, b.name.toLowerAscii)
     if byName != 0: byName else: cmp(a.path, b.path))

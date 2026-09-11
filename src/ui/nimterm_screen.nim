@@ -29,6 +29,7 @@ type
     notice*: string
     noticeUntil*: float
     footer*: string
+    extensionWidgetLines*: seq[string]
     headerSessionId: string
     headerSessionLine: int
     headerSessionColumn: int
@@ -213,6 +214,8 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
         isError: event.toolError)
     of sekCompaction:
       screen.transcript.appendStatus("Context compacted")
+    of sekExtension:
+      discard
     of sekName:
       discard
     of sekSelection:
@@ -533,8 +536,11 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
   let maxInputRows = max(1, footerRow - headerHeight)
   let inputRows = min(maxInputRows, textRows + verticalPadding * 2)
   let inputTop = max(0, footerRow - inputRows)
+  let widgetRows = min(screen.extensionWidgetLines.len,
+    max(0, inputTop - headerHeight))
+  let widgetTop = inputTop - widgetRows
   let transcriptTop = min(headerHeight + 1, inputTop)
-  var contentBottom = inputTop
+  var contentBottom = widgetTop
   var questionTop = inputTop
   var questionHeight = 0
   if not screen.questionWidget.isNil:
@@ -552,9 +558,14 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
     let menuContentRows = min(maxMenuContentRows, screen.menu.items.len)
     let menuRows = if menuContentRows > 0: menuContentRows + 2 else: 0
     if menuRows > 0:
-      let menuTop = max(headerHeight, inputTop - menuRows)
-      let menuHeight = inputTop - menuTop
+      let menuTop = max(headerHeight, widgetTop - menuRows)
+      let menuHeight = widgetTop - menuTop
       screen.menu.render(canvas, rect(0, menuTop, w, menuHeight))
+    for i in 0 ..< widgetRows:
+      canvas.writeAnsiText(0, widgetTop + i,
+        currentTheme.paint(currentTheme.muted,
+          screen.extensionWidgetLines[screen.extensionWidgetLines.len - widgetRows + i]),
+        defaultStyle(), w)
     screen.composer.render(canvas, rect(0, inputTop, w, inputRows))
   if not screen.questionWidget.isNil:
     screen.questionWidget.render(canvas, rect(0, questionTop, w, questionHeight))

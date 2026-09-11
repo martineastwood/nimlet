@@ -5,6 +5,7 @@ import nimgent
 import nimterm/[app, events, keys, transcript, widget, widgets]
 import nimterm/term
 import ../agent
+import ../extension_runtime
 import ../events
 import ../session
 import ../permissions
@@ -55,6 +56,8 @@ proc newNimletTurnSource*(active: Future[bool] = nil): NimletTurnSource =
 
 proc refreshFooter(controller: NimletController,
                    width = controller.screen.statusWidth) =
+  controller.screen.extensionWidgetLines =
+    controller.agent[].extensionRuntime.widgetLines
   controller.screen.footer = controller.screen.statusLine(controller.agent[].statusFooter(width))
 
 proc drainCancelPipe(controller: NimletController) =

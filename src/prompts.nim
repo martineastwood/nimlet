@@ -36,10 +36,15 @@ proc parseTemplate(path: string): PromptTemplate =
 
 proc discoverPrompts*(workspace: string): seq[PromptTemplate] =
   ## Non-recursive; later roots override the same name.
-  for root in pluginRoots(workspace, "prompts"):
-    if not dirExists(root): continue
+  let root = if dirExists(workspace): expandFilename(workspace) else: workspace
+  for promptsDir in [getHomeDir() / ".agents" / "prompts",
+                     nimletConfigDir() / "prompts",
+                     root / ".agent" / "prompts",
+                     root / ".agents" / "prompts",
+                     root / ".nimlet" / "prompts"]:
+    if not dirExists(promptsDir): continue
     var paths: seq[string]
-    for kind, path in walkDir(root):
+    for kind, path in walkDir(promptsDir):
       if kind == pcFile and path.toLowerAscii.endsWith(".md"): paths.add path
     paths.sort()
     for path in paths:

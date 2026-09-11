@@ -90,11 +90,8 @@ proc estimateEventTokens*(event: SessionEvent, workspace = ""): int =
       result += imageTokenEstimate(img, workspace)
   of sekCompaction:
     result += estimateTokens(event.summary)
-  of sekName:
+  of sekExtension, sekName, sekSelection:
     discard
-  of sekSelection:
-    discard
-
 proc latestCompaction*(session: Session): tuple[found: bool, index: int] =
   for i in countdown(session.events.high, 0):
     if session.events[i].kind == sekCompaction:
@@ -197,7 +194,7 @@ proc serializeEvent(event: SessionEvent, toolCap = 2000): string =
     result.add ":\n" & outp & "\n"
     if event.toolImages.len > 0:
       result.add "[" & $event.toolImages.len & " image]\n"
-  of sekCompaction, sekName, sekSelection:
+  of sekCompaction, sekExtension, sekName, sekSelection:
     result = ""
 
 proc serializeRange*(session: Session, startIdx, endIdx: int): string =

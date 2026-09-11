@@ -12,6 +12,7 @@ type
     sekAssistant = "assistant"
     sekToolResult = "tool_result"
     sekCompaction = "compaction"
+    sekExtension = "extension"
     sekName = "name"
     sekSelection = "selection"
 
@@ -32,6 +33,10 @@ type
       summary*: string
       firstKeptIndex*: int
       tokensBefore*: int
+      compactionDetails*: JsonNode
+    of sekExtension:
+      extension*: string
+      extensionData*: JsonNode
     of sekName:
       sessionName*: string
     of sekSelection:
@@ -98,7 +103,7 @@ proc parseImage(node: JsonNode): ImageContent =
                data: node.getOrDefault("data").getStr,
                path: node.getOrDefault("path").getStr)
 
-proc eventJson(event: SessionEvent): JsonNode =
+proc eventJson*(event: SessionEvent): JsonNode =
   result = %*{"type": $event.kind}
   case event.kind
   of sekUser, sekAssistant:
@@ -186,6 +191,11 @@ proc eventJson(event: SessionEvent): JsonNode =
     result["summary"] = %event.summary
     result["first_kept_index"] = %event.firstKeptIndex
     result["tokens_before"] = %event.tokensBefore
+    if not event.compactionDetails.isNil:
+      result["details"] = event.compactionDetails
+  of sekExtension:
+    result["extension"] = %event.extension
+    result["data"] = event.extensionData
   of sekName:
     result["name"] = %event.sessionName
   of sekSelection:
@@ -258,7 +268,12 @@ proc parseEvent(node: JsonNode): SessionEvent =
     SessionEvent(kind: sekCompaction,
       summary: node.getOrDefault("summary").getStr,
       firstKeptIndex: node.getOrDefault("first_kept_index").getInt,
-      tokensBefore: node.getOrDefault("tokens_before").getInt)
+      tokensBefore: node.getOrDefault("tokens_before").getInt,
+      compactionDetails: node.getOrDefault("details"))
+  of "extension":
+    SessionEvent(kind: sekExtension,
+      extension: node.getOrDefault("extension").getStr,
+      extensionData: node.getOrDefault("data"))
   of "name":
     SessionEvent(kind: sekName, sessionName: node.getOrDefault("name").getStr)
   of "selection":
@@ -366,9 +381,23 @@ proc lastSelection*(session: Session): tuple[provider, model: string] =
         event.requestedModel else: event.model)
 
 proc addCompaction*(session: var Session, summary: string, firstKeptIndex: int,
-                    tokensBefore: int) =
+                    tokensBefore: int, details: JsonNode = nil) =
   session.append SessionEvent(kind: sekCompaction, summary: summary,
-    firstKeptIndex: firstKeptIndex, tokensBefore: tokensBefore)
+    firstKeptIndex: firstKeptIndex, tokensBefore: tokensBefore,
+    compactionDetails: details)
+
+proc addExtensionEntry*(session: var Session, extension: string, data: JsonNode) =
+  session.append SessionEvent(kind: sekExtension, extension: extension,
+    extensionData: if data.isNil: newJNull() else: data)
+
+proc extensionEntries*(session: Session, extension: string): seq[JsonNode] =
+  for event in session.events:
+    if event.kind == sekExtension and event.extension == extension:
+      result.add event.extensionData
+
+proc entriesJson*(session: Session): JsonNode =
+  result = newJArray()
+  for event in session.events: result.add event.eventJson
 
 proc setName*(session: var Session, name: string) =
   session.name = name.strip
@@ -416,7 +445,7 @@ proc messagesFrom*(session: Session, startIdx: int): seq[Message] =
         result.add Message(role: roleUser, content: @[])
       result[^1].content.add toolResult(event.toolId, event.toolOutput,
         event.toolError, event.toolImages)
-    of sekCompaction, sekName, sekSelection:
+    of sekCompaction, sekExtension, sekName, sekSelection:
       discard
 
 proc messages*(session: Session): seq[Message] =

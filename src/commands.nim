@@ -20,6 +20,7 @@ type
     slError
     slSkill
     slPrompt
+    slExtension
     slHelp
     slPlan
     slAct
@@ -49,6 +50,7 @@ type
     error*: string
     skillName*: string
     promptName*: string
+    extensionName*: string
 
   CommandSpec* = object
     kind*: SlashKind
@@ -109,6 +111,15 @@ const CommandSpecs* = [
   CommandSpec(kind: slQuit, name: "/exit", usage: "/exit",
     description: "exit")
 ]
+
+type ExtensionCommandInfo* = object
+  name*: string
+  description*: string
+
+var extensionCommands: seq[ExtensionCommandInfo]
+
+proc setExtensionCommands*(commands: seq[ExtensionCommandInfo]) =
+  extensionCommands = commands
 
 proc helpText*(): string =
   ## Emit the full command/shortcut reference as markdown. The console and TUI
@@ -216,6 +227,10 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
     SlashCommand(kind: slError, error: msg)
 
   if not matched.found:
+    for extension in extensionCommands:
+      if command.toLowerAscii == "/" & extension.name.toLowerAscii:
+        return SlashCommand(kind: slExtension, extensionName: extension.name,
+          arg: arg)
     let prompt = namedPrompt(workspace, command)
     if prompt.len > 0:
       return SlashCommand(kind: slPrompt, promptName: prompt, arg: arg)
@@ -305,7 +320,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
       return fail("Usage: " & matched.spec.usage)
     if parts.len == 2:
       result.arg = parts[1].toLowerAscii
-  of slNone, slError, slSkill, slPrompt:
+  of slNone, slError, slSkill, slPrompt, slExtension:
     return fail("Unknown command '" & command & "'; try /help")
 
 proc resumeOpensPicker*(input: string): bool =
@@ -564,6 +579,10 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
       let slash = "/" & prompt.name
       if not isBuiltinSlash(slash) and slash.startsWith(command) and slash notin result:
         result.add slash
+    for extension in extensionCommands:
+      let slash = "/" & extension.name
+      if not isBuiltinSlash(slash) and slash.startsWith(command) and slash notin result:
+        result.add slash
     return
   let m = mentionAt(input, cur)
   if m.active:
@@ -608,6 +627,9 @@ proc commandSuggestionDescription*(suggestion: string,
     let name = suggestion[1 .. ^1]
     for prompt in discoverPrompts(workspace):
       if prompt.name.toLowerAscii == name.toLowerAscii: return prompt.description
+    for extension in extensionCommands:
+      if extension.name.toLowerAscii == name.toLowerAscii:
+        return extension.description
     if not name.startsWith("skill:"): return
     let skillName = name[6 .. ^1]
     for skill in discoverSkills(workspace):

@@ -237,6 +237,7 @@ proc runMain*() =
     stderr.writeLine "STARTUP_FAILED"
     stderr.writeLine e.msg
     quit(1)
+  defer: agent.stopExtensions()
 
   agent.yolo = cli.yolo
 
