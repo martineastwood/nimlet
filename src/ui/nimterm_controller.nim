@@ -1,6 +1,6 @@
 ## Nimlet terminal controller: turns, actions, interactions, and recovery.
 
-import std/[asyncdispatch, posix, times]
+import std/[asyncdispatch, posix, strutils, times]
 import nimgent
 import nimterm/[app, events, keys, transcript, widget, widgets]
 import nimterm/term
@@ -23,7 +23,8 @@ type
     agent: ptr Agent
     turns: NimletTurnSource
     ui: TurnSink
-    queuedInput: string
+    steeringQueue: seq[string]
+    followUpQueue: seq[string]
     interruptRequested: bool
     modeSwitchPending: bool
     quitRequested: bool
@@ -56,9 +57,17 @@ proc newNimletTurnSource*(active: Future[bool] = nil): NimletTurnSource =
 
 proc refreshFooter(controller: NimletController,
                    width = controller.screen.statusWidth) =
-  controller.screen.extensionWidgetLines =
-    controller.agent[].extensionRuntime.widgetLines
-  controller.screen.footer = controller.screen.statusLine(controller.agent[].statusFooter(width))
+  controller.screen.extensionWidgetLines = controller.agent[].extensionRuntime.widgetLines
+  for message in controller.steeringQueue:
+    controller.screen.extensionWidgetLines.add "Steering: " & message
+  for message in controller.followUpQueue:
+    controller.screen.extensionWidgetLines.add "Follow-up: " & message
+  if controller.steeringQueue.len + controller.followUpQueue.len > 0:
+    controller.screen.extensionWidgetLines.add "↳ Alt+Up to edit queued messages"
+  var status = controller.agent[].statusFooter(width)
+  let queued = controller.steeringQueue.len + controller.followUpQueue.len
+  if queued > 0: status.add " · queue:" & $queued
+  controller.screen.footer = controller.screen.statusLine(status)
 
 proc processExtensionUpdates(controller: NimletController) =
   controller.agent[].extensionRuntime.pump()
@@ -75,6 +84,28 @@ proc signalCancel(controller: NimletController) =
   if controller.cancelWrite < 0: return
   var byte = '\1'
   discard posix.write(controller.cancelWrite, byte.addr, 1)
+
+proc takeQueue(queue: var seq[string], mode: string): seq[string] =
+  if queue.len == 0: return
+  let count = if mode == "all": queue.len else: 1
+  for _ in 0 ..< count:
+    result.add queue[0]
+    queue.delete(0)
+
+proc restoreQueuedMessages(controller: NimletController) =
+  let queued = controller.steeringQueue & controller.followUpQueue
+  controller.steeringQueue.setLen(0)
+  controller.followUpQueue.setLen(0)
+  if queued.len == 0:
+    controller.refreshFooter()
+    return
+  let current = controller.screen.composer.text
+  let restored = queued.join("\n\n")
+  controller.screen.composer.setText(
+    if current.strip.len == 0: restored else: restored & "\n\n" & current)
+  controller.screen.historyIndex = -1
+  controller.screen.refreshMenu()
+  controller.refreshFooter()
 
 proc requestInterrupt(controller: NimletController) =
   controller.interruptRequested = true
@@ -146,6 +177,9 @@ proc previewSink(controller: NimletController): TurnSink =
       discard response
       discard isFinal
       refresh(),
+    userMessage: proc (text: string) =
+      screen.transcript.appendUser(text)
+      refresh(),
     agentEvent: send,
     question: proc (prompt: string,
                     options: seq[QuestionOption]): Future[QuestionAnswer] {.async.} =
@@ -185,6 +219,12 @@ proc previewSink(controller: NimletController): TurnSink =
     wasInterrupted: proc (): bool = controller.quitRequested or
       controller.interruptRequested,
     noteInterrupted: proc () = discard,
+    takeSteering: proc (): seq[string] =
+      result = controller.steeringQueue.takeQueue(controller.agent[].config.steeringMode)
+      controller.refreshFooter(),
+    takeFollowUp: proc (): seq[string] =
+      result = controller.followUpQueue.takeQueue(controller.agent[].config.followUpMode)
+      controller.refreshFooter(),
     showSession: proc (session: Session) =
       screen.updateHeaderSession(session.id)
       screen.forkChoices = session.forkChoices
@@ -265,12 +305,8 @@ proc finishTurn(controller: NimletController, keepRunning, succeeded: bool) =
     controller.modeSwitchPending = false
     controller.agent[].mode = if controller.agent[].mode == modeAct:
       modePlan else: modeAct
-  let next = controller.queuedInput
-  controller.queuedInput = ""
-  if next.len > 0 and keepRunning and succeeded and
-      not controller.interruptRequested:
-    controller.startSubmission(next)
-    return
+  if keepRunning and (controller.interruptRequested or not succeeded):
+    controller.restoreQueuedMessages()
   controller.interruptRequested = false
   controller.resetInteraction()
 
@@ -335,7 +371,13 @@ proc handleAction*(controller: NimletController, running: var App,
       controller.agent[].mode = if controller.agent[].mode == modeAct:
         modePlan else: modeAct
       controller.refreshFooter()
-    of "queue": controller.queuedInput = action.value
+    of "queue-steer":
+      controller.steeringQueue.add action.value
+      controller.refreshFooter()
+    of "queue-followup":
+      controller.followUpQueue.add action.value
+      controller.refreshFooter()
+    of "dequeue": controller.restoreQueuedMessages()
     of "queue-mode-toggle":
       controller.modeSwitchPending = not controller.modeSwitchPending
     of "interrupt": controller.requestInterrupt()
@@ -347,7 +389,8 @@ proc handleAction*(controller: NimletController, running: var App,
 proc newNimletController*(screen: NimtermScreen, app: ptr App,
                            agent: ptr Agent): NimletController =
   result = NimletController(screen: screen, app: app, agent: agent,
-    turns: newNimletTurnSource(), cancelRead: -1, cancelWrite: -1)
+    turns: newNimletTurnSource(), cancelRead: -1, cancelWrite: -1,
+    steeringQueue: @[], followUpQueue: @[])
   var fds: array[2, cint]
   if posix.pipe(fds) == 0:
     result.cancelRead = fds[0]

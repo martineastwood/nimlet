@@ -30,7 +30,8 @@ Event payloads:
 | `queue` | `action`, `depth`, optional `content` |
 
 Queue records are part of version 1 for interactive/RPC producers;
-one-shot JSON mode does not create a queue.
+`mode` is `steer` or `follow_up` when applicable. One-shot JSON mode does not
+create a queue.
 
 Example:
 

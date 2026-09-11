@@ -191,7 +191,7 @@ method generateAsync(provider: TestProvider,
   inc provider.callCount
 
 suite "rpc mode":
-  test "commands are correlated and one prompt can queue":
+  test "commands are correlated and steering prompts queue":
     let root = freshDir()
     defer: removeDir(root)
     var config = loadConfig(root, root / "config.json")
@@ -209,7 +209,7 @@ suite "rpc mode":
     defer: runtime.close()
 
     runtime.handleRpcLine("""{"id":"one","type":"prompt","message":"A"}""")
-    runtime.handleRpcLine("""{"id":"two","type":"prompt","message":"B"}""")
+    runtime.handleRpcLine("""{"id":"two","type":"steer","message":"B"}""")
     let responses = output.filterIt(it.getOrDefault("type").getStr == "response")
     let queue = output.filterIt(it.getOrDefault("type").getStr == "queue")
     check responses[0]["id"].getStr == "one"
@@ -218,13 +218,15 @@ suite "rpc mode":
     check responses[1]["state"].getStr == "queued"
     check queue[0]["request_id"].getStr == "two"
 
-    for _ in 0 .. 30:
+    for _ in 0 .. 100:
       pumpAsyncDispatcher()
       discard runtime.pollRpc()
     runtime.handleRpcLine("""{"id":"state","type":"get_state"}""")
     check output[^1]["id"].getStr == "state"
     check not output[^1]["busy"].getBool
     check not output[^1]["queued"].getBool
+    check output[^1]["steering_mode"].getStr == "one-at-a-time"
+    check output[^1]["follow_up_mode"].getStr == "one-at-a-time"
     check output.filterIt(it.getOrDefault("type").getStr == "message" and
       it.getOrDefault("role").getStr == "assistant").mapIt(
         it["content"].getStr) == @["first", "second"]
@@ -1439,6 +1441,68 @@ suite "agent turn persistence":
     check agent.session.messages[1].content[0].text == "part one"
     check agent.session.messages[2].content[0].text == "part two"
 
+  test "steering interrupts after tools and follow-ups wait for completion":
+    var config = loadConfig()
+    config.contextWindow = 1_000_000
+    config.compactionEnabled = false
+    var reg: ToolRegistry
+    reg.register(ToolDefinition(name: "touch"),
+      proc(input: JsonNode): Future[ToolResult] {.async.} =
+        return ToolResult(output: "ok"))
+    let steeringProvider = TestProvider(
+      name: "test",
+      responses: @[
+        ProviderResponse(content: @[toolUse("call-1", "touch", %*{})],
+          finishReason: frToolUse),
+        ProviderResponse(content: @[text("steered")], finishReason: frEndTurn)])
+    var steeringReady = false
+    var steeringRequests: seq[ProviderRequest]
+    var steeringAgent = Agent(config: config, provider: steeringProvider,
+      session: initSession(), tools: reg)
+    steeringAgent.session.addUserMessage("start")
+    var steeringUi = consoleSink()
+    steeringUi.generate = proc(provider: Provider,
+                               request: ProviderRequest): Future[ProviderResponse] {.async.} =
+      steeringRequests.add request
+      return await provider.generateAsync(request)
+    steeringUi.toolResult = proc(output: string, isError: bool) =
+      steeringReady = true
+    steeringUi.takeSteering = proc(): seq[string] =
+      if steeringReady:
+        steeringReady = false
+        return @["steer"]
+    steeringAgent.runTurn(steeringUi)
+    check steeringProvider.callCount == 2
+    check steeringRequests[1].messages[^1].content[0].text == "steer"
+
+    let followProvider = TestProvider(
+      name: "test",
+      responses: @[
+        ProviderResponse(content: @[text("first")], finishReason: frEndTurn),
+        ProviderResponse(content: @[text("followed")], finishReason: frEndTurn)])
+    var followAvailable = false
+    var followQueued = false
+    var followRequests: seq[ProviderRequest]
+    var followAgent = Agent(config: config, provider: followProvider,
+      session: initSession())
+    followAgent.session.addUserMessage("start")
+    var followUi = consoleSink()
+    followUi.generate = proc(provider: Provider,
+                             request: ProviderRequest): Future[ProviderResponse] {.async.} =
+      followRequests.add request
+      return await provider.generateAsync(request)
+    followUi.commitGenerate = proc(response: ProviderResponse, final: bool) =
+      if final and not followQueued:
+        followQueued = true
+        followAvailable = true
+    followUi.takeFollowUp = proc(): seq[string] =
+      if followAvailable:
+        followAvailable = false
+        return @["follow"]
+    followAgent.runTurn(followUi)
+    check followProvider.callCount == 2
+    check followRequests[1].messages[^1].content[0].text == "follow"
+
   test "runTurn emits normalized lifecycle events":
     var config = loadConfig()
     config.contextWindow = 1_000_000
@@ -1552,6 +1616,8 @@ suite "slash commands":
     check parseSlash("hello").kind == slNone
     check parseSlash("/thinking high").kind == slThinking
     check parseSlash("/thinking high").arg == "high"
+    check parseSlash("/settings").kind == slSettings
+    check commandError("/settings now") == "/settings takes no arguments"
     check parseSlash("/models refresh").kind == slModelsRefresh
     check parseSlash("/model refresh").kind == slError
     check parseSlash("/model").kind == slModel
@@ -1587,6 +1653,32 @@ suite "slash commands":
     check parseSlash("/web on").arg == "on"
     check parseSlash("/web off").arg == "off"
     check "Invalid /web value" in commandError("/web maybe")
+
+  test "settings changes and persists queue modes":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "config.json"
+    var config = loadConfig(root, path)
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    var prompts: seq[string]
+    var ui = consoleSink()
+    ui.question = proc(prompt: string,
+                       options: seq[QuestionOption]): Future[QuestionAnswer] {.async.} =
+      prompts.add prompt
+      if prompt == "Settings":
+        check options.len == 1
+        return QuestionAnswer(selected: 0)
+      check prompt == "Queue"
+      check options.len == 4
+      return QuestionAnswer(selected: 1)
+    check agent.processInput("/settings", ui)
+    check prompts == @["Settings", "Queue"]
+    check agent.config.steeringMode == "all"
+    check agent.config.followUpMode == "one-at-a-time"
+    let restored = loadConfig(root, path)
+    check restored.steeringMode == "all"
+    check restored.followUpMode == "one-at-a-time"
 
   test "copy sends the latest assistant text to the interface":
     let root = freshDir()
@@ -2112,6 +2204,20 @@ suite "compaction":
     check reloaded.events[^1].tokensBefore == 42
 
 suite "json config":
+  test "queue delivery modes load and persist":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "config.json"
+    writeFile(path, """{"agent":{"steering_mode":"all","follow_up_mode":"one-at-a-time"}}""")
+    var config = loadConfig(root, path)
+    check config.steeringMode == "all"
+    check config.followUpMode == "one-at-a-time"
+    config.followUpMode = "all"
+    persistQueueModes(config)
+    let restored = loadConfig(root, path)
+    check restored.steeringMode == "all"
+    check restored.followUpMode == "all"
+
   test "provider models survive switches and restart without losing settings":
     let root = freshDir()
     defer: removeDir(root)

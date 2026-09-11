@@ -438,6 +438,8 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
     case event.key
     of keyEscape, keyCtrlC:
       return screen.actionHandled("interrupt")
+    of keyAltUp:
+      return screen.actionHandled("dequeue")
     of keyEnter:
       if screen.composer.text.strip.len > 0:
         if screen.composer.text.strip.startsWith("/"):
@@ -447,12 +449,25 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
           screen.rememberInput()
           screen.composer.clear()
           screen.refreshMenu()
-          return screen.actionHandled("queue", queued)
+          return screen.actionHandled("queue-steer", queued)
+      return eventHandled
+    of keyAltEnter:
+      if screen.composer.text.strip.len > 0:
+        if screen.composer.text.strip.startsWith("/"):
+          screen.footer = screen.statusLine("slash commands cannot be queued")
+        else:
+          let queued = screen.composer.text
+          screen.rememberInput()
+          screen.composer.clear()
+          screen.refreshMenu()
+          return screen.actionHandled("queue-followup", queued)
       return eventHandled
     of keyShiftTab:
       return screen.actionHandled("queue-mode-toggle")
     else:
       discard
+  if event.key == keyAltUp:
+    return screen.actionHandled("dequeue")
   case event.key
   of keyCopy:
     return screen.transcript.copySelection()
@@ -503,7 +518,7 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
       discard screen.transcript.handle(event)
   of keyCtrlB, keyCtrlF, keyCtrlO:
     discard screen.transcript.handle(event)
-  of keyEnter:
+  of keyEnter, keyAltEnter:
     if forkOpensPicker(screen.composer.text):
       screen.composer.setText("/fork ")
       screen.refreshMenu()

@@ -1,20 +1,25 @@
 ## Long-running JSONL control protocol over stdin/stdout.
 
-import std/[asyncdispatch, json, os, posix, strutils]
+import std/[asyncdispatch, json, os, posix, sequtils, strutils]
 import nimgent
-import agent, events, hooks, session
+import agent, config, events, hooks, session
 import ui/turn
 
 type
   RpcWriter* = proc (event: JsonNode) {.closure.}
+  RpcQueuedPrompt = object
+    requestId: string
+    prompt: string
   RpcRuntime* = ref object
     agent: ptr Agent
     ui: TurnSink
     writeEvent: RpcWriter
     active: Future[bool]
     activeRequestId: string
-    queuedRequestId: string
-    queuedPrompt: string
+    steeringQueue: seq[RpcQueuedPrompt]
+    followUpQueue: seq[RpcQueuedPrompt]
+    steeringMode: string
+    followUpMode: string
     interrupted: bool
     shuttingDown*: bool
     turnFailed: bool
@@ -59,9 +64,22 @@ proc drainCancel(runtime: RpcRuntime) =
   while posix.read(runtime.cancelRead, bytes.addr, bytes.len) > 0:
     discard
 
+proc queuedCount(runtime: RpcRuntime): int =
+  runtime.steeringQueue.len + runtime.followUpQueue.len
+
+proc clearQueue(runtime: RpcRuntime) =
+  if runtime.queuedCount == 0: return
+  runtime.steeringQueue.setLen(0)
+  runtime.followUpQueue.setLen(0)
+  runtime.send queueEventJson(runtime.agent[].session.id, "clear", "", 0)
+
 proc newRpcRuntime*(agent: ptr Agent, writeEvent: RpcWriter = nil): RpcRuntime =
   result = RpcRuntime(agent: agent, writeEvent: writeEvent, step: -1,
-    cancelRead: -1, cancelWrite: -1)
+    cancelRead: -1, cancelWrite: -1,
+    steeringMode: if agent[].config.steeringMode.len == 0: DefaultQueueMode
+                   else: normalizeQueueMode(agent[].config.steeringMode),
+    followUpMode: if agent[].config.followUpMode.len == 0: DefaultQueueMode
+                  else: normalizeQueueMode(agent[].config.followUpMode))
   var fds: array[2, cint]
   if posix.pipe(fds) == 0:
     result.cancelRead = fds[0]
@@ -90,11 +108,30 @@ proc newRpcRuntime*(agent: ptr Agent, writeEvent: RpcWriter = nil): RpcRuntime =
     if final or response.text.len > 0:
       runtime.send messageEventJson(runtime.agent[].session.id, runtime.turnId,
         "assistant", response.text, response.model, final)
+  ui.userMessage = proc (text: string) =
+    runtime.send messageEventJson(runtime.agent[].session.id, runtime.turnId,
+      "user", text)
   ui.toolStart = proc (call: ContentBlock) = discard
   ui.toolResult = proc (output: string, isError: bool) = discard
   ui.poll = proc () = discard
   ui.wasInterrupted = proc (): bool = runtime.interrupted
   ui.noteInterrupted = proc () = discard
+  ui.takeSteering = proc (): seq[string] =
+    let count = if runtime.steeringMode == "all": runtime.steeringQueue.len else: min(1, runtime.steeringQueue.len)
+    for _ in 0 ..< count:
+      let item = runtime.steeringQueue[0]
+      runtime.steeringQueue.delete(0)
+      result.add item.prompt
+      runtime.send queueEventJson(runtime.agent[].session.id, "dequeue", "",
+        runtime.queuedCount, item.requestId, "steer")
+  ui.takeFollowUp = proc (): seq[string] =
+    let count = if runtime.followUpMode == "all": runtime.followUpQueue.len else: min(1, runtime.followUpQueue.len)
+    for _ in 0 ..< count:
+      let item = runtime.followUpQueue[0]
+      runtime.followUpQueue.delete(0)
+      result.add item.prompt
+      runtime.send queueEventJson(runtime.agent[].session.id, "dequeue", "",
+        runtime.queuedCount, item.requestId, "follow_up")
   ui.showSession = proc (session: Session) =
     runtime.send sessionEventJson("session_start", session.id)
   ui.generate = proc (provider: Provider,
@@ -135,6 +172,23 @@ proc startPrompt(runtime: RpcRuntime, id, prompt: string) =
   runtime.activeRequestId = id
   runtime.active = processInputAsync(runtime.agent, prompt, runtime.ui)
 
+proc startQueuedPrompt(runtime: RpcRuntime) =
+  var item: RpcQueuedPrompt
+  var mode = ""
+  if runtime.steeringQueue.len > 0:
+    item = runtime.steeringQueue[0]
+    runtime.steeringQueue.delete(0)
+    mode = "steer"
+  elif runtime.followUpQueue.len > 0:
+    item = runtime.followUpQueue[0]
+    runtime.followUpQueue.delete(0)
+    mode = "follow_up"
+  else:
+    return
+  runtime.send queueEventJson(runtime.agent[].session.id, "dequeue", "",
+    runtime.queuedCount, item.requestId, mode)
+  runtime.startPrompt(item.requestId, item.prompt)
+
 proc handleRpcCommand*(runtime: RpcRuntime, command: JsonNode) =
   if command.isNil or command.kind != JObject:
     runtime.send responseJson("", false, error = "Command must be a JSON object.")
@@ -156,14 +210,36 @@ proc handleRpcCommand*(runtime: RpcRuntime, command: JsonNode) =
     elif runtime.active.isNil:
       runtime.send responseJson(id, true, state = "started")
       runtime.startPrompt(id, message.getStr)
-    elif runtime.queuedPrompt.len == 0:
-      runtime.queuedRequestId = id
-      runtime.queuedPrompt = message.getStr
+    else:
+      let behavior = command.getOrDefault("streamingBehavior").getStr
+      if behavior notin ["steer", "followUp"]:
+        runtime.send responseJson(id, false,
+          error = "prompt requires streamingBehavior: steer or followUp while busy.")
+      else:
+        let item = RpcQueuedPrompt(requestId: id, prompt: message.getStr)
+        if behavior == "steer": runtime.steeringQueue.add item
+        else: runtime.followUpQueue.add item
+        runtime.send responseJson(id, true, state = "queued")
+        runtime.send queueEventJson(runtime.agent[].session.id, "enqueue",
+          message.getStr, runtime.queuedCount, id,
+          if behavior == "steer": "steer" else: "follow_up")
+  of "steer", "follow_up":
+    let message = command.getOrDefault("message")
+    if message.kind != JString or message.getStr.strip.len == 0:
+      runtime.send responseJson(id, false,
+        error = typeNode.getStr & " requires message.")
+    elif runtime.shuttingDown:
+      runtime.send responseJson(id, false, error = "RPC is shutting down.")
+    elif runtime.active.isNil:
+      runtime.send responseJson(id, false, error = "Agent is idle; use prompt.")
+    else:
+      let item = RpcQueuedPrompt(requestId: id, prompt: message.getStr)
+      if typeNode.getStr == "steer": runtime.steeringQueue.add item
+      else: runtime.followUpQueue.add item
       runtime.send responseJson(id, true, state = "queued")
       runtime.send queueEventJson(runtime.agent[].session.id, "enqueue",
-        runtime.queuedPrompt, 1, id)
-    else:
-      runtime.send responseJson(id, false, error = "Prompt queue is full.")
+        message.getStr, runtime.queuedCount, id,
+        if typeNode.getStr == "steer": "steer" else: "follow_up")
   of "interrupt":
     if not runtime.active.isNil: runtime.signalCancel()
     runtime.send responseJson(id, true,
@@ -172,15 +248,36 @@ proc handleRpcCommand*(runtime: RpcRuntime, command: JsonNode) =
     var response = responseJson(id, true)
     response["session_id"] = %runtime.agent[].session.id
     response["busy"] = %(not runtime.active.isNil)
-    response["queued"] = %(runtime.queuedPrompt.len > 0)
+    response["queued"] = %(runtime.queuedCount > 0)
+    response["steering"] = %runtime.steeringQueue.len
+    response["follow_up"] = %runtime.followUpQueue.len
+    response["steering_mode"] = %runtime.steeringMode
+    response["follow_up_mode"] = %runtime.followUpMode
     response["mode"] = %($runtime.agent[].mode)
     runtime.send response
+  of "clear_queue":
+    var response = responseJson(id, true)
+    response["steering"] = %runtime.steeringQueue.mapIt(it.prompt)
+    response["follow_up"] = %runtime.followUpQueue.mapIt(it.prompt)
+    runtime.clearQueue()
+    runtime.send response
+  of "set_steering_mode", "set_follow_up_mode":
+    let mode = command.getOrDefault("mode").getStr
+    if mode notin ["all", "one-at-a-time"]:
+      runtime.send responseJson(id, false, error = "mode must be all or one-at-a-time.")
+    elif typeNode.getStr == "set_steering_mode":
+      runtime.steeringMode = mode
+      runtime.agent[].config.steeringMode = mode
+      persistQueueModes(runtime.agent[].config)
+      runtime.send responseJson(id, true)
+    else:
+      runtime.followUpMode = mode
+      runtime.agent[].config.followUpMode = mode
+      persistQueueModes(runtime.agent[].config)
+      runtime.send responseJson(id, true)
   of "shutdown":
     runtime.shuttingDown = true
-    if runtime.queuedPrompt.len > 0:
-      runtime.queuedPrompt = ""
-      runtime.queuedRequestId = ""
-      runtime.send queueEventJson(runtime.agent[].session.id, "clear", "", 0)
+    runtime.clearQueue()
     if not runtime.active.isNil: runtime.signalCancel()
     runtime.send responseJson(id, true,
       state = if runtime.active.isNil: "stopped" else: "stopping")
@@ -208,14 +305,8 @@ proc pollRpc*(runtime: RpcRuntime): bool =
         runId: runtime.runId, step: runtime.step, error: e.msg))
     runtime.drainCancel()
     runtime.interrupted = false
-    if runtime.queuedPrompt.len > 0 and not runtime.shuttingDown:
-      let id = runtime.queuedRequestId
-      let prompt = runtime.queuedPrompt
-      runtime.queuedRequestId = ""
-      runtime.queuedPrompt = ""
-      runtime.send queueEventJson(runtime.agent[].session.id, "dequeue", "", 0,
-        id)
-      runtime.startPrompt(id, prompt)
+    if runtime.queuedCount > 0 and not runtime.shuttingDown:
+      runtime.startQueuedPrompt()
   not (runtime.shuttingDown and runtime.active.isNil)
 
 proc runRpc*(agent: var Agent) =
@@ -233,10 +324,7 @@ proc runRpc*(agent: var Agent) =
     if rpcSigint != 0 and not runtime.shuttingDown:
       runtime.shuttingDown = true
       runtime.interrupted = true
-      if runtime.queuedPrompt.len > 0:
-        runtime.queuedPrompt = ""
-        runtime.queuedRequestId = ""
-        runtime.send queueEventJson(agent.session.id, "clear", "", 0)
+      runtime.clearQueue()
     var ready = TPollfd(fd: STDIN_FILENO, events: POLLIN)
     if posix.poll(ready.addr, Tnfds(1), 0) > 0:
       var bytes: array[4096, char]

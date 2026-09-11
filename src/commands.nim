@@ -42,6 +42,7 @@ type
     slReload
     slName
     slTheme
+    slSettings
     slQuit
 
   SlashCommand* = object
@@ -106,6 +107,8 @@ const CommandSpecs* = [
     description: "show or set the session name"),
   CommandSpec(kind: slTheme, name: "/theme", usage: "/theme [name]",
     description: "show or set the UI theme"),
+  CommandSpec(kind: slSettings, name: "/settings", usage: "/settings",
+    description: "configure message delivery and other settings"),
   CommandSpec(kind: slQuit, name: "/quit", usage: "/quit",
     description: "exit"),
   CommandSpec(kind: slQuit, name: "/exit", usage: "/exit",
@@ -134,7 +137,7 @@ proc helpText*(): string =
     @[slModel, slModelsRefresh, slThinking, slProvider, slWeb],
     @[slSession, slStats, slNew, slResume, slFork, slCopy, slName, slCompact],
     @[slYolo, slPermissions],
-    @[slTheme],
+    @[slTheme, slSettings],
     @[slDoctor, slReload, slQuit],
   ]
   for i in 0 ..< groups.len:
@@ -151,10 +154,11 @@ proc helpText*(): string =
   result.add "## Shortcuts (interactive UI)\n\n"
   const keys = [
     ("Shift+Tab", "switch plan / act mode (after the current turn if busy)"),
-    ("Enter", "submit; while a turn runs, queue the next message"),
-    ("Shift+Enter / Alt+Enter", "newline in the composer"),
-    ("Esc / Ctrl-C", "clear the composer; interrupt a running turn"),
-    ("Ctrl-U", "clear the composer and unqueue"),
+    ("Enter", "submit, or queue a steering message while a turn runs"),
+    ("Alt+Enter", "queue a follow-up message while a turn runs"),
+    ("Shift+Enter", "newline in the composer"),
+    ("Esc / Ctrl-C", "interrupt; restore queued messages to the composer"),
+    ("Alt+Up", "restore queued messages to the composer"),
     ("Ctrl-V", "paste text or an image file path"),
     ("Tab / Up / Down", "accept / move through suggestions"),
     ("Left/Right, or Ctrl-B/F", "move the cursor by character"),
@@ -245,7 +249,8 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   of slDoctor:
     if parts.len > 2 or (parts.len == 2 and parts[1] != "test"):
       return fail("Usage: /doctor [test]")
-  of slHelp, slPlan, slAct, slStats, slSession, slNew, slCopy, slQuit, slReload:
+  of slHelp, slPlan, slAct, slStats, slSession, slNew, slCopy, slSettings,
+     slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
   of slProvider:

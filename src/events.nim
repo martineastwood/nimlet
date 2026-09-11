@@ -107,11 +107,12 @@ proc messageEventJson*(sessionId, turnId, role, content: string,
   if role == "assistant": result["final"] = %final
 
 proc queueEventJson*(sessionId, action, content: string, depth: int,
-                     requestId = ""): JsonNode =
+                     requestId = "", mode = ""): JsonNode =
   result = %*{"version": jsonEventVersion, "type": "queue",
     "session_id": sessionId, "action": action, "depth": depth}
   if content.len > 0: result["content"] = %content
   if requestId.len > 0: result["request_id"] = %requestId
+  if mode.len > 0: result["mode"] = %mode
 
 proc diagnosticEventJson*(level, message: string): JsonNode =
   %*{"version": jsonEventVersion, "type": "diagnostic",

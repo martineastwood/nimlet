@@ -53,10 +53,12 @@ query parameters), config source paths, write target, and whether each key is
 set. `/doctor test` makes a small request to the selected provider (normal API
 usage applies), without adding it to session history or changing configuration.
 
-`/model`, `/thinking`, and `/web` write immediately: to the project file if it
+`/model`, `/thinking`, `/web`, and `/settings` write immediately: to the project file if it
 exists, otherwise to the global file (created if needed). `/model` sets
 `default_provider` and `default_model`; `/thinking` sets `agent.thinking`;
-`/web on` sets `agent.web_search` (hosted search on OpenAI, Anthropic, and Google).
+`/web on` sets `agent.web_search` (hosted search on OpenAI, Anthropic, and Google);
+`/settings` opens a settings menu; choose `Queue` to set
+`agent.steering_mode` and `agent.follow_up_mode`.
 
 Configuration example:
 
@@ -84,7 +86,9 @@ Configuration example:
   "agent": {
     "max_tokens": 4096,
     "request_timeout": 300,
-    "web_search": false
+    "web_search": false,
+    "steering_mode": "one-at-a-time",
+    "follow_up_mode": "one-at-a-time"
   }
 }
 ```
@@ -125,11 +129,14 @@ request settings.
 
 Run `./nimlet` from the workspace you want the agent to modify.
 
-While a turn is running, you can type the next message and press Enter to
-queue it. The composer stays editable until the current turn finishes; queued
-text is not added to the model conversation until that point. Slash commands
-cannot be queued. Escape or Ctrl-C interrupts the current turn without
-discarding a queued message. Ctrl-U clears the composer and unqueues it.
+While a turn is running, Enter queues a steering message for delivery after the
+current assistant tool batch, before the next model call. Alt+Enter queues a
+follow-up message for delivery after the agent finishes. The composer stays
+editable while messages are queued, and slash commands cannot be queued.
+Escape or Ctrl-C interrupts the current turn and restores queued messages to the
+composer. Alt+Up restores queued messages without interrupting the turn.
+Use `/settings` → `Queue` to choose `one-at-a-time` or `all` delivery
+independently for steering and follow-up queues.
 Pass a prompt on the command line for a one-shot turn that exits when
 done: `./nimlet fix the failing parser test`. Add `-i` /
 `--interactive` to run that prompt and then keep the REPL open.
@@ -187,11 +194,12 @@ preserved beside the session as `<session>.jsonl.recovery-<timestamp>`.
 
 `/help` prints both the commands and this list in the TUI.
 
-- `Enter` — submit; while a turn is running, queue the next message
-- `Shift+Enter` / `Alt+Enter` — newline in the composer
+- `Enter` — submit; while a turn is running, queue a steering message
+- `Alt+Enter` — queue a follow-up message while a turn runs
+- `Shift+Enter` — newline in the composer
 - `Shift+Tab` — toggle plan / act mode
-- `Esc` / `Ctrl-C` — clear the composer; interrupt a running turn
-- `Ctrl-U` — clear the composer and unqueue
+- `Esc` / `Ctrl-C` — interrupt a running turn and restore queued messages
+- `Alt+Up` — restore queued messages to the composer
 - `Ctrl-V` — paste text or a clipboard image
 - `Tab` / `Up` / `Down` — accept / move through suggestions
 - `Left`/`Right`, `Ctrl-B`/`Ctrl-F` — move the cursor by character

@@ -21,6 +21,7 @@ type
     ## Clear any in-flight stream overlay; show assistant text when `final`
     ## (end of turn).
     commitGenerate*: proc (response: ProviderResponse, final: bool) {.closure.}
+    userMessage*: proc (text: string) {.closure.}
     agentEvent*: proc (event: NimletEvent) {.closure.}
     question*: proc (prompt: string,
                      options: seq[QuestionOption]): Future[QuestionAnswer] {.closure.}
@@ -31,6 +32,8 @@ type
     poll*: proc () {.closure.}
     wasInterrupted*: proc (): bool {.closure.}
     noteInterrupted*: proc () {.closure.}
+    takeSteering*: proc (): seq[string] {.closure.}
+    takeFollowUp*: proc (): seq[string] {.closure.}
     showSession*: proc (session: Session) {.closure.}
     setEditorText*: proc (text: string) {.closure.}
     copyText*: proc (text: string) {.closure.}
@@ -61,6 +64,7 @@ proc consoleSink*(): TurnSink =
     emit: emit,
     render: noop,
     onChange: noop,
+    userMessage: proc (text: string) = discard,
     commitGenerate: proc (response: ProviderResponse, final: bool) =
       if final: printResponse(response),
     toolStart: proc (call: ContentBlock) =

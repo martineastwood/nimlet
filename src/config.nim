@@ -34,6 +34,8 @@ type
     reserveTokens*: int
     keepRecentTokens*: int
     thinking*: string
+    steeringMode*: string
+    followUpMode*: string
     webSearch*: bool  ## hosted web_search; only sent on supported providers
     requestTimeout*: int
     maxToolOutputBytes*: int
@@ -42,6 +44,8 @@ type
 
 const
   ThinkingLevels* = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+  QueueModes* = ["one-at-a-time", "all"]
+  DefaultQueueMode* = "one-at-a-time"
 
 proc guessContextWindow*(model: string): int =
   let m = model.toLowerAscii
@@ -65,6 +69,12 @@ proc normalizeThinking*(value: string): string =
   if v in ThinkingLevels: return v
   raise newException(ValueError,
     "invalid thinking level '" & value & "' (use " & ThinkingLevels.join("|") & ")")
+
+proc normalizeQueueMode*(value: string): string =
+  let v = value.strip.toLowerAscii
+  if v in QueueModes: return v
+  raise newException(ValueError,
+    "invalid queue mode '" & value & "' (use " & QueueModes.join("|") & ")")
 
 proc snapToEfforts*(want: string, efforts: openArray[string]): string =
   ## Nearest canonical rung. Tie goes to the higher effort. `none` never snaps up.
@@ -410,6 +420,10 @@ proc applyDoc(config: var AgentConfig, doc: JsonNode) =
   if envThinking.len > 0:
     thinking = envThinking
   config.thinking = if thinking.len == 0: "" else: normalizeThinking(thinking)
+  config.steeringMode = normalizeQueueMode(jstr(agent, "steering_mode",
+    DefaultQueueMode))
+  config.followUpMode = normalizeQueueMode(jstr(agent, "follow_up_mode",
+    DefaultQueueMode))
   config.webSearch = jbool(agent, "web_search", false)
   config.requestTimeout = jint(agent, "request_timeout", 300)
   config.sessionDir = expandConfigPath(jstr(agent, "session_dir"),
@@ -450,6 +464,20 @@ proc persistModel*(config: AgentConfig) =
     doc["agent"]["web_search"] = %true
   elif "agent" in doc and doc["agent"].kind == JObject and "web_search" in doc["agent"]:
     delete(doc["agent"], "web_search")
+  let dir = config.writePath.parentDir
+  if dir.len > 0: createDir(dir)
+  writeFile(config.writePath, pretty(doc) & "\n")
+
+proc persistQueueModes*(config: AgentConfig) =
+  if config.writePath.len == 0: return
+  var doc = loadJsonFile(config.writePath)
+  ensureAgentObj(doc)
+  let steering = if config.steeringMode.len == 0: DefaultQueueMode
+                 else: normalizeQueueMode(config.steeringMode)
+  let followUp = if config.followUpMode.len == 0: DefaultQueueMode
+                 else: normalizeQueueMode(config.followUpMode)
+  doc["agent"]["steering_mode"] = %steering
+  doc["agent"]["follow_up_mode"] = %followUp
   let dir = config.writePath.parentDir
   if dir.len > 0: createDir(dir)
   writeFile(config.writePath, pretty(doc) & "\n")

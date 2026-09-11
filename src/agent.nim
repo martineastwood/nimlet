@@ -539,6 +539,41 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
       else:
         ui.emit(mlOk, msg & " (transcript on /new, /resume, or restart)")
         ui.onChange()
+  of slSettings:
+    if ui.question.isNil:
+      ui.emit(mlWarn, "Settings UI is unavailable in this interface.")
+    else:
+      let category = await ui.question("Settings", @[
+        QuestionOption(label: "Queue",
+          description: "configure steering and follow-up message delivery")])
+      if not category.cancelled and category.selected == 0:
+        let answer = await ui.question("Queue", @[
+          QuestionOption(label: "Steering: one-at-a-time",
+            description: if agent.config.steeringMode == "one-at-a-time":
+              "current · deliver one steering message per assistant turn"
+            else: "deliver one steering message per assistant turn"),
+          QuestionOption(label: "Steering: all",
+            description: if agent.config.steeringMode == "all":
+              "current · deliver all steering messages at the next turn boundary"
+            else: "deliver all steering messages at the next turn boundary"),
+          QuestionOption(label: "Follow-up: one-at-a-time",
+            description: if agent.config.followUpMode == "one-at-a-time":
+              "current · deliver one follow-up per completed run"
+            else: "deliver one follow-up per completed run"),
+          QuestionOption(label: "Follow-up: all",
+            description: if agent.config.followUpMode == "all":
+              "current · deliver all follow-ups when the run completes"
+            else: "deliver all follow-ups when the run completes")])
+        if not answer.cancelled and answer.selected in 0 .. 3:
+          case answer.selected
+          of 0: agent.config.steeringMode = "one-at-a-time"
+          of 1: agent.config.steeringMode = "all"
+          of 2: agent.config.followUpMode = "one-at-a-time"
+          of 3: agent.config.followUpMode = "all"
+          else: discard
+          persistQueueModes(agent.config)
+          ui.emit(mlOk, "Message delivery settings saved.")
+          ui.onChange()
   of slProvider:
     if cmd.arg.len == 0:
       ui.emit(mlPlain, agent.provider.name)
@@ -684,6 +719,19 @@ proc retryAfterOverflow(agent: ptr Agent, e: ref ProviderError,
   ui.emit(mlDim, res.message)
   res.didCompact
 
+proc deliverQueuedMessages(agent: ptr Agent, ui: TurnSink,
+                           messages: seq[string]) =
+  for message in messages:
+    if message.strip.len == 0: continue
+    agent[].session.addUserMessage(message)
+    if not ui.userMessage.isNil: ui.userMessage(message)
+
+proc takeSteering(ui: TurnSink): seq[string] =
+  if not ui.takeSteering.isNil: return ui.takeSteering()
+
+proc takeFollowUp(ui: TurnSink): seq[string] =
+  if not ui.takeFollowUp.isNil: return ui.takeFollowUp()
+
 proc persistInterruptedToolResults(session: var Session,
                                    calls: openArray[ContentBlock],
                                    firstPending: int) =
@@ -751,7 +799,13 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
   var truncatedResponses = 0
   var emptyResponses = 0
   var emptyResponseFollowupPending = false
+  var pendingSteering = takeSteering(ui)
   while true:
+    if pendingSteering.len == 0:
+      pendingSteering = takeSteering(ui)
+    if pendingSteering.len > 0:
+      agent.deliverQueuedMessages(ui, pendingSteering)
+      pendingSteering.setLen(0)
     var request = agent[].buildRequest()
     let compacted = await agent.maybeAutoCompact(request, compactionPoll(ui), ui)
     emitAutoCompact(ui, compacted)
@@ -819,9 +873,16 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
           sessionId: agent.session.id, turnId: runId, step: step,
           error: "The model stopped without a user-facing answer."))
         ui.emit(mlError, "The model stopped without a user-facing answer.")
+      pendingSteering = takeSteering(ui)
+      if pendingSteering.len > 0:
+        continue
+      let followUp = takeFollowUp(ui)
+      if followUp.len > 0:
+        agent.deliverQueuedMessages(ui, followUp)
+        continue
       ui.emitAgentEvent(NimletEvent(kind: neRunFinished, runId: runId,
-        sessionId: agent.session.id, turnId: runId, step: step,
-        model: response.model, text: response.text))
+          sessionId: agent.session.id, turnId: runId, step: step,
+          model: response.model, text: response.text))
       await agent.fireTurnHooks(heTurnEnd, ui)
       return
     if truncated:
@@ -954,6 +1015,9 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
     ui.emitAgentEvent(NimletEvent(kind: neStepFinished, runId: runId,
       sessionId: agent.session.id, turnId: runId, step: step,
       model: response.model))
+    pendingSteering = takeSteering(ui)
+    if pendingSteering.len > 0:
+      continue
 
 proc runTurn*(agent: var Agent, ui: TurnSink) =
   waitFor runTurnAsync(addr agent, ui)
