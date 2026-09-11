@@ -20,6 +20,7 @@ type
     workspace*: string
     sessionDir*: string
     modelPicker*: ModelPicker
+    forkChoices*: seq[ForkChoice]
     history*: seq[string]
     historyIndex*: int
     busy*: bool
@@ -219,20 +220,20 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
   screen.transcript.apply AgentUiEvent(kind: ueRunFinished, runId: runId,
     step: max(0, step - 1))
 
-proc refreshMenu(screen: NimtermScreen) =
+proc refreshMenu*(screen: NimtermScreen) =
   let input = screen.composer.text
   let hasSuggestions = input.strip.startsWith("/") or
     mentionAt(input, screen.composer.cursor).active
   let suggestions = if hasSuggestions:
     commandSuggestions(input, screen.workspace, screen.sessionDir,
-      screen.modelPicker, screen.composer.cursor)
+      screen.modelPicker, screen.composer.cursor, screen.forkChoices)
   else:
     @[]
   screen.menu.items.setLen(0)
   for suggestion in suggestions:
     screen.menu.items.add MenuItem(label: suggestion,
       description: commandSuggestionDescription(suggestion, screen.workspace,
-        screen.sessionDir))
+        screen.sessionDir, screen.forkChoices))
   if screen.menu.items.len == 0:
     screen.menu.selected = -1
   else:
@@ -500,7 +501,10 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
   of keyCtrlB, keyCtrlF, keyCtrlO:
     discard screen.transcript.handle(event)
   of keyEnter:
-    if resumeOpensPicker(screen.composer.text):
+    if forkOpensPicker(screen.composer.text):
+      screen.composer.setText("/fork ")
+      screen.refreshMenu()
+    elif resumeOpensPicker(screen.composer.text):
       screen.composer.setText("/resume ")
       screen.refreshMenu()
     elif screen.menu.items.len > 0:

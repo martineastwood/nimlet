@@ -124,6 +124,7 @@ proc makeSkillTool*(workspace: string): (ToolDefinition, ToolProc) =
   )
 
   proc run(input: JsonNode): Future[ToolResult] {.async.} =
+    await sleepAsync(0)
     if input.isNil or input.kind != JObject or "name" notin input:
       return ToolResult(output: "skill name is required", isError: true)
     let loaded = loadSkill(workspace, input["name"].getStr)

@@ -62,7 +62,19 @@ proc makeBashTool*(workDir: string,
       let pid = Pid(p.processID)
       discard setpgid(pid, pid)
 
-    let (endKind, exitCode) = await waitForChildAsync(p, timeout)
+    var stdoutOffset, stderrOffset = 0
+    proc stream(path, label: string, offset: var int) =
+      if not fileExists(path): return
+      let content = readFile(path)
+      if content.len <= offset: return
+      streamOutput((if offset == 0: label else: "") & content[offset .. ^1])
+      offset = content.len
+    proc streamNewOutput() =
+      stream(stdoutPath, "stdout:\n", stdoutOffset)
+      stream(stderrPath, "stderr:\n", stderrOffset)
+    let (endKind, exitCode) = await waitForChildAsync(p, timeout,
+      onPoll = streamNewOutput)
+    streamNewOutput()
     let elapsed = epochTime() - start
     p.close()
 

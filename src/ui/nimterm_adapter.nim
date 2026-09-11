@@ -11,6 +11,7 @@ proc toAgentUiEvent*(event: NimletEvent): AgentUiEvent =
     of neThinkingDelta: ueThinkingDelta
     of neToolCalled: ueToolCalled
     of neApprovalRequired: ueApprovalRequired
+    of neToolOutputDelta: ueToolOutputDelta
     of neToolResult: ueToolResult
     of neStepFinished: ueStepFinished
     of neRunFinished: ueRunFinished

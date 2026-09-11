@@ -80,6 +80,16 @@ type
     ## Startup warnings from hook discovery (invalid manifests).
     hookWarnings*: seq[string]
 
+proc sessionTotals*(agent: Agent): tuple[usage: Usage, cost: float, priced: bool] =
+  ## Usage and USD cost summed over every assistant response in the session.
+  for event in agent.session.events:
+    if event.kind == sekAssistant:
+      result.usage.addUsage(event.usage)
+      let eventModel = if event.model.len > 0: event.model else: event.requestedModel
+      if formatUsageCost(event.provider, eventModel, event.usage).len > 0:
+        result.cost += estimateUsageCost(event.provider, eventModel, event.usage)
+        result.priced = true
+
 proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   ## Add fields by priority, skipping optional detail that does not fit.
   const
@@ -98,7 +108,6 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
     parts.add t.paint(t.warning, "[yolo]")
   let (found, storedModel, usage) = agent.session.lastAssistant
   let model = if agent.config.model.len > 0: agent.config.model else: storedModel
-  let usageModel = if storedModel.len > 0: storedModel else: model
   if found:
     let window = agent.config.effectiveContextWindow
     if window > 0:
@@ -113,9 +122,9 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   if model.len > 0:
     add t.paint(t.model, model)
   if found:
-    let cost = formatUsageCost(agent.config.provider, usageModel, usage)
-    if cost.len > 0:
-      add t.paint(t.dim, cost)
+    let totals = agent.sessionTotals
+    if totals.priced:
+      add t.paint(t.dim, formatUsd(totals.cost))
     let labels = formatUsageLabels(usage)
     for label in labels:
       add column(t.paint(t.dim, label), usageWidth)
@@ -146,18 +155,9 @@ proc statsReport(agent: Agent): string =
   let cost = formatUsageCost(agent.config.provider,
     if storedModel.len > 0: storedModel else: model, usage)
   if cost.len > 0: result.add "\nLatest cost: " & cost
-  var total = Usage()
-  var totalCost = 0.0
-  var priced = false
-  for event in agent.session.events:
-    if event.kind == sekAssistant:
-      total.addUsage(event.usage)
-      let eventModel = if event.model.len > 0: event.model else: event.requestedModel
-      if formatUsageCost(event.provider, eventModel, event.usage).len > 0:
-        totalCost += estimateUsageCost(event.provider, eventModel, event.usage)
-        priced = true
-  result.add "\nSession: " & formatUsageLabels(total).join("  ")
-  if priced: result.add "\nSession cost: " & formatUsd(totalCost)
+  let totals = agent.sessionTotals
+  result.add "\nSession: " & formatUsageLabels(totals.usage).join("  ")
+  if totals.priced: result.add "\nSession cost: " & formatUsd(totals.cost)
 
 proc attachProvider(agent: var Agent) =
   case agent.config.provider.toLowerAscii
@@ -576,6 +576,35 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
         if not ui.showSession.isNil:
           ui.showSession(agent.session)
         ui.onChange()
+  of slFork:
+    if cmd.arg.len == 0:
+      ui.emit(mlPlain, "Usage: /fork [message]")
+    else:
+      var ordinal = 0
+      try:
+        ordinal = parseInt(cmd.arg)
+      except ValueError:
+        ordinal = 0
+      let choices = agent.session.forkChoices
+      if ordinal < 1 or ordinal > choices.len:
+        ui.emit(mlError, "Fork message not found: " & cmd.arg)
+      else:
+        let choice = choices[ordinal - 1]
+        let dirtyWorkspace = gitWorkspaceDirty(agent.config.workspace)
+        try:
+          let next = forkSession(agent.session, choice.eventIndex)
+          await agent.switchSession(next, ui)
+          agent[].restoreSessionModel()
+          if not ui.showSession.isNil:
+            ui.showSession(agent.session)
+          if dirtyWorkspace:
+            ui.emit(mlWarn, "Git workspace has uncommitted changes; /fork copies conversation history only and leaves files untouched.")
+          if not ui.setEditorText.isNil:
+            ui.setEditorText(choice.text)
+          ui.emit(mlOk, "Forked session: " & agent.session.id)
+          ui.onChange()
+        except CatchableError as e:
+          ui.emit(mlError, e.msg)
   of slName:
     if cmd.arg.len == 0:
       ui.emit(mlPlain, if agent.session.name.len == 0: "(unnamed)"
@@ -641,6 +670,24 @@ proc askUser(input: JsonNode, ui: TurnSink): Future[ToolResult] {.async.} =
   if answer.text.len == 0:
     return toolFailure("question_cancelled", "The user did not provide an answer.")
   ToolResult(output: answer.text, value: %answer.text)
+
+proc executeParallelReadOnly(agent: ptr Agent, call: ContentBlock,
+                             ui: TurnSink): Future[ToolResult] {.async.} =
+  if agent.mode == modePlan:
+    return await agent.planTools.execute(call.name, call.input)
+  var args = if call.input.isNil: newJObject() else: call.input
+  let pre = await agent.runLifecycle(hePreToolCall,
+    preToolPayload(call.name, args), ui, call.name)
+  if not pre.allowed:
+    return toolFailure("approval_denied", pre.reason)
+  if not pre.arguments.isNil:
+    args = pre.arguments
+  result = await agent.tools.execute(call.name, args)
+  let post = await agent.runLifecycle(hePostToolCall,
+    postToolPayload(call.name, args, result.output, result.isError), ui,
+    call.name)
+  if post.hasOutput: result.output = post.output
+  if post.hasIsError: result.isError = post.isError
 
 proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
   let runId = (if agent.session.id.len > 0: agent.session.id else: "session") &
@@ -752,12 +799,28 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
     if calls.len > 0:
       emptyResponses = 0
 
+    var parallelReadOnly: seq[Future[ToolResult]]
+    var runReadOnlyInParallel = calls.len > 1
+    for call in calls:
+      if call.parseError.len > 0 or
+         call.name notin ["read", "grep", "glob", "read_skill"]:
+        runReadOnlyInParallel = false
+        break
+    if runReadOnlyInParallel:
+      for call in calls:
+        ui.emitAgentEvent(NimletEvent(kind: neToolCalled, runId: runId,
+          sessionId: agent.session.id, turnId: runId, step: step,
+          toolId: call.id, toolName: call.name, toolInput: call.input))
+        ui.toolStart(call)
+        parallelReadOnly.add executeParallelReadOnly(agent, call, ui)
+
     for i in 0 ..< calls.len:
       let call = calls[i]
-      ui.emitAgentEvent(NimletEvent(kind: neToolCalled, runId: runId,
-        sessionId: agent.session.id, turnId: runId, step: step,
-        toolId: call.id, toolName: call.name, toolInput: call.input))
-      ui.toolStart(call)
+      if not runReadOnlyInParallel:
+        ui.emitAgentEvent(NimletEvent(kind: neToolCalled, runId: runId,
+          sessionId: agent.session.id, turnId: runId, step: step,
+          toolId: call.id, toolName: call.name, toolInput: call.input))
+        ui.toolStart(call)
       ui.poll()
       if ui.wasInterrupted():
         agent[].session.persistInterruptedToolResults(calls, i)
@@ -768,7 +831,9 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
         await agent.fireTurnHooks(heTurnEnd, ui, interrupted = true)
         return
       var toolResult: ToolResult
-      if call.parseError.len > 0:
+      if runReadOnlyInParallel:
+        toolResult = await parallelReadOnly[i]
+      elif call.parseError.len > 0:
         toolResult = toolFailure("invalid_arguments", call.parseError,
           %*{"tool": call.name})
       elif call.name == "ask_user":
@@ -806,7 +871,11 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
               args = pre.arguments
             toolResult = await agent.tools.execute(call.name, args, proc (): bool =
               ui.poll()
-              ui.wasInterrupted())
+              ui.wasInterrupted(), proc (output: string) =
+              ui.emitAgentEvent(NimletEvent(kind: neToolOutputDelta,
+                runId: runId, sessionId: agent.session.id, turnId: runId,
+                step: step, toolId: call.id, toolName: call.name,
+                toolOutput: output)))
             let post = await agent.runLifecycle(hePostToolCall,
               postToolPayload(call.name, args, toolResult.output,
                 toolResult.isError), ui, call.name)

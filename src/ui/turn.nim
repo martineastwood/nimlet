@@ -32,6 +32,7 @@ type
     wasInterrupted*: proc (): bool {.closure.}
     noteInterrupted*: proc () {.closure.}
     showSession*: proc (session: Session) {.closure.}
+    setEditorText*: proc (text: string) {.closure.}
     generate*: proc (provider: Provider,
                      request: ProviderRequest): Future[ProviderResponse] {.closure.}
 

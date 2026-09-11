@@ -34,6 +34,7 @@ type
     slCompact
     slPermissions
     slResume
+    slFork
     slReload
     slName
     slTheme
@@ -89,6 +90,8 @@ const CommandSpecs* = [
     description: "show or clear remembered tool grants"),
   CommandSpec(kind: slResume, name: "/resume", usage: "/resume [ID]",
     description: "list this project's sessions, or resume one"),
+  CommandSpec(kind: slFork, name: "/fork", usage: "/fork [message]",
+    description: "fork from a user message and continue in a new session"),
   CommandSpec(kind: slReload, name: "/reload", usage: "/reload",
     description: "rescan tools, extensions, and hooks"),
   CommandSpec(kind: slName, name: "/name", usage: "/name [title]",
@@ -112,7 +115,7 @@ proc helpText*(): string =
   const groupKinds: array[6, seq[SlashKind]] = [
     @[slPlan, slAct, slHelp],
     @[slModel, slModelsRefresh, slThinking, slProvider, slWeb],
-    @[slSession, slStats, slNew, slResume, slName, slCompact],
+    @[slSession, slStats, slNew, slResume, slFork, slName, slCompact],
     @[slYolo, slPermissions],
     @[slTheme],
     @[slDoctor, slReload, slQuit],
@@ -192,7 +195,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   let matched = specNamed(command)
   if parts.len == 1 and trailingSpace and matched.found and
      matched.spec.kind in {slModelsRefresh, slThinking, slWeb, slResume, slModel,
-                           slProvider, slName, slTheme}:
+                           slProvider, slName, slTheme, slFork}:
     return
 
   proc fail(msg: string): SlashCommand =
@@ -268,6 +271,16 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
       return fail("Usage: " & matched.spec.usage)
     if parts.len == 2:
       result.arg = parts[1]
+  of slFork:
+    if parts.len > 2:
+      return fail("Usage: " & matched.spec.usage)
+    if parts.len == 2:
+      try:
+        if parseInt(parts[1]) < 1:
+          return fail("Usage: " & matched.spec.usage)
+      except ValueError:
+        return fail("Usage: " & matched.spec.usage)
+      result.arg = parts[1]
   of slName:
     result.arg = arg
   of slTheme:
@@ -282,6 +295,11 @@ proc resumeOpensPicker*(input: string): bool =
   ## Bare `/resume` should open the in-composer session menu, not dump a list.
   let cmd = parseSlash(input)
   cmd.kind == slResume and cmd.arg.len == 0
+
+proc forkOpensPicker*(input: string): bool =
+  ## Bare `/fork` should open the current session's user-message menu.
+  let cmd = parseSlash(input)
+  cmd.kind == slFork and cmd.arg.len == 0
 
 proc commandError*(input: string, workspace = getCurrentDir()): string =
   parseSlash(input, workspace).error
@@ -445,7 +463,8 @@ proc suggestModels(query: string, picker: ModelPicker): seq[string] =
 
 proc commandSuggestions*(input: string, workspace = getCurrentDir(),
                          sessionDir = "", picker = ModelPicker(),
-                         cursor = -1): seq[string] =
+                         cursor = -1,
+                         forkChoices: seq[ForkChoice] = @[]): seq[string] =
   let cur = if cursor < 0: input.len else: cursor
   let stripped = input.strip
   if stripped.startsWith("/"):
@@ -474,6 +493,17 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
           for info in listSessionsCached(sessionDir, workspace):
             if prefix.len == 0 or info.id.startsWith(prefix):
               result.add "/resume " & info.id
+          if result.len > 0:
+            return
+        if incomplete: return @[matched.spec.usage]
+      of slFork:
+        let prefix = if parts.len >= 2: parts[1] else: ""
+        if forkChoices.len > 0 and
+            (parts.len <= 1 or incomplete or prefix.len > 0):
+          for i, choice in forkChoices:
+            let ordinal = $(i + 1)
+            if prefix.len == 0 or ordinal.startsWith(prefix):
+              result.add "/fork " & ordinal
           if result.len > 0:
             return
         if incomplete: return @[matched.spec.usage]
@@ -517,13 +547,23 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
 
 proc commandSuggestionDescription*(suggestion: string,
                                    workspace = getCurrentDir(),
-                                   sessionDir = ""): string =
+                                   sessionDir = "",
+                                   forkChoices: seq[ForkChoice] = @[]): string =
   const resumePrefix = "/resume "
   const modelPrefix = "/model "
+  const forkPrefix = "/fork "
   if sessionDir.len > 0 and suggestion.startsWith(resumePrefix):
     let id = suggestion[resumePrefix.len .. ^1].strip
     for info in listSessionsCached(sessionDir, workspace):
       if info.id == id: return sessionLabel(info)
+  if suggestion.startsWith(forkPrefix):
+    let token = suggestion[forkPrefix.len .. ^1].strip
+    try:
+      let ordinal = parseInt(token)
+      if ordinal >= 1 and ordinal <= forkChoices.len:
+        return forkChoices[ordinal - 1].preview
+    except ValueError:
+      discard
   if suggestion.startsWith(modelPrefix):
     let id = suggestion[modelPrefix.len .. ^1]
     if id.len > 0 and id[0] != '[':

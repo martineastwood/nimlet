@@ -10,6 +10,7 @@ type
     neThinkingDelta
     neToolCalled
     neApprovalRequired
+    neToolOutputDelta
     neToolResult
     neStepFinished
     neRunFinished

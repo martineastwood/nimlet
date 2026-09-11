@@ -180,8 +180,14 @@ proc previewSink(controller: NimletController): TurnSink =
     noteInterrupted: proc () = discard,
     showSession: proc (session: Session) =
       screen.updateHeaderSession(session.id)
+      screen.forkChoices = session.forkChoices
       screen.transcript.setTranscript(newTranscript())
       screen.replaySession(session)
+      refresh(),
+    setEditorText: proc (text: string) =
+      screen.historyIndex = -1
+      screen.composer.setText(text)
+      screen.refreshMenu()
       refresh(),
     generate: proc (provider: Provider,
                     request: ProviderRequest): Future[ProviderResponse] {.async.} =
@@ -223,6 +229,7 @@ proc resetInteraction(controller: NimletController) =
   controller.approvalFuture = nil
   screen.activity = ""
   screen.modelPicker = modelPickerFrom(controller.agent[])
+  screen.forkChoices = controller.agent[].session.forkChoices
   controller.refreshFooter()
   controller.app[].focus(screen)
   controller.app[].invalidate()
@@ -286,6 +293,8 @@ proc handleAction*(controller: NimletController, running: var App,
                    action: UiAction) =
   let screen = controller.screen
   case action.sourceId
+  of "composer":
+    if action.kind == "submit": controller.handleAction(running, screen.submit().action)
   of "transcript":
     if action.kind == "copy":
       copyToClipboard(action.value)
@@ -336,6 +345,7 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
     discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
     discard fcntl(result.cancelWrite, F_SETFL, O_NONBLOCK)
   let controller = result
+  screen.forkChoices = agent[].session.forkChoices
   result.refreshFooter()
   result.ui = previewSink(result)
   result.turns.onFinish = proc (keepRunning, succeeded: bool) =

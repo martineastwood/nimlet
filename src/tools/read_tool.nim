@@ -22,6 +22,7 @@ proc makeReadTool*(ws: Workspace): (ToolDefinition, ToolProc) =
   )
 
   proc run(input: JsonNode): Future[ToolResult] {.async.} =
+    await sleepAsync(0)
     let path = input["path"].getStr
     var resolved: string
     try:

@@ -189,6 +189,33 @@ method generateAsync(provider: TestProvider,
   inc provider.callCount
 
 suite "black-box terminal integration":
+  test "enter submits after mouse focus moves through the transcript and composer":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    agent.provider = TestProvider(responses: @[
+      ProviderResponse(content: @[text("done")], finishReason: frEndTurn)])
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    screen.transcript.appendUser("copy me")
+    var app = termapp.newApp(backend, screen)
+    let controller = newNimletController(screen, addr app, addr agent)
+    app.render()
+    app.dispatch(UiEvent(kind: uiMouse, mouse: umPress,
+      x: screen.transcript.area.x + 2, y: screen.transcript.area.y))
+    app.dispatch(UiEvent(kind: uiMouse, mouse: umRelease,
+      x: screen.transcript.area.x + 5, y: screen.transcript.area.y))
+    app.dispatch(UiEvent(kind: uiMouse, mouse: umPress,
+      x: screen.composer.area.x + 2, y: screen.composer.area.y))
+    backend.feed("hello\r")
+    for _ in 0 .. 30: discard app.step()
+    check not controller.busy
+    check agent.session.events[0].message.content[0].text == "hello"
+
   test "raw bytes submit a turn, render its result, and survive resize":
     let root = freshDir()
     defer: removeDir(root)
@@ -310,6 +337,30 @@ suite "black-box terminal integration":
     check agent.session.id != oldId
     check ("Session: " & agent.session.id) in backend.frame.plainText
     check ("Session: " & oldId) notin backend.frame.plainText
+
+  test "fork picker opens on Enter and leaves the selected prompt in the composer":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    let oldId = agent.session.id
+    agent.session.addUserMessage("first prompt")
+    agent.session.addAssistantResponse(ProviderResponse(content: @[text("answer")]))
+    agent.session.addUserMessage("second prompt")
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker(), oldId)
+    var app = termapp.newApp(backend, screen)
+    let controller = newNimletController(screen, addr app, addr agent)
+    app.render()
+    backend.feed("/fork\r\r")
+    for _ in 0 .. 100: discard app.step()
+    check not controller.busy
+    check agent.session.id != oldId
+    check agent.session.events.len == 0
+    check screen.composer.text == "first prompt"
 
   test "split key sequences route through a modal question":
     let root = freshDir()
@@ -533,6 +584,20 @@ suite "permissions":
     check policy.check(status) == pcAsk
 
 suite "bash tool":
+  test "streams output while running":
+    let root = freshDir()
+    defer: removeDir(root)
+    var reg: ToolRegistry
+    let bash = makeBashTool(root)
+    reg.register(bash[0], bash[1])
+    var streamed = ""
+    let result = waitFor reg.execute("bash",
+      %*{"command": "printf first; sleep 0.05; printf second"},
+      onOutput = proc (output: string) = streamed.add output)
+    check not result.isError
+    check "first" in streamed
+    check "second" in streamed
+
   test "captures output and exit code":
     let root = freshDir()
     defer: removeDir(root)
@@ -797,6 +862,29 @@ suite "session":
     check infos[0].id == "s" & $(sessionListLimit + 2)
     check listSessions(root, limit = 0).len == sessionListLimit + 3
 
+  test "fork copies the prefix before a selected user message":
+    let root = freshDir()
+    defer: removeDir(root)
+    var sess = initSession(root / "source.jsonl", "source")
+    sess.workspace = root
+    sess.addUserMessage("first")
+    sess.addAssistantResponse(ProviderResponse(content: @[text("answer")]))
+    sess.addUserMessage("second")
+    let choices = sess.forkChoices
+    check choices.len == 2
+    check choices[0].eventIndex == 0
+    check choices[0].text == "first"
+    check choices[1].eventIndex == 2
+    let forked = forkSession(sess, choices[1].eventIndex)
+    check forked.id != sess.id
+    check forked.workspace == root
+    check forked.events.len == 2
+    check forked.events[0].kind == sekUser
+    check forked.events[1].kind == sekAssistant
+    let loaded = initSession(forked.path, forked.id)
+    check loaded.events.len == 2
+    check loaded.messages[0].content[0].text == "first"
+
 suite "OpenRouter provider":
   test "configuration defaults to OpenRouter":
     let root = freshDir()
@@ -1004,6 +1092,37 @@ suite "persistent agent sessions":
     check agent.config.model == "kept/model"
     check warns.len == 1
     check "/other/project" in warns[0]
+
+  test "fork switches sessions and restores the selected prompt":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    agent.session.addUserMessage("first")
+    agent.session.addAssistantResponse(ProviderResponse(content: @[text("answer")]))
+    agent.session.addUserMessage("second")
+    var shown = ""
+    var selected = ""
+    var ui = consoleSink()
+    ui.showSession = proc (session: Session) = shown = session.id
+    ui.setEditorText = proc (text: string) = selected = text
+    check agent.processInput("/fork 2", ui)
+    check shown == agent.session.id
+    check selected == "second"
+    check agent.session.id != ""
+    check agent.session.events.len == 2
+    check agent.session.messages[0].content[0].text == "first"
+    check fileExists(agent.session.path)
+    ui.generate = proc (provider: Provider,
+                        request: ProviderRequest): Future[ProviderResponse] {.async.} =
+      return ProviderResponse(content: @[text("continued")], finishReason: frEndTurn)
+    check agent.processInput(selected, ui)
+    let forkId = agent.session.id
+    check agent.session.events.len == 4
+    let resumed = initAgent(config, forkId)
+    check resumed.session.events.len == 4
+    check resumed.session.messages[^2].content[0].text == "second"
 
 suite "agent turn persistence":
   test "plan mode limits advertised and executed tools, act restores normal tools":
@@ -1348,6 +1467,11 @@ suite "slash commands":
     check parseSlash("/resume").arg.len == 0
     check parseSlash("/resume abc").kind == slResume
     check parseSlash("/resume abc").arg == "abc"
+    check parseSlash("/fork").kind == slFork
+    check parseSlash("/fork").arg.len == 0
+    check parseSlash("/fork 2").kind == slFork
+    check parseSlash("/fork 2").arg == "2"
+    check "Usage: /fork [message]" in commandError("/fork nope")
     check parseSlash("/name").kind == slName
     check parseSlash("/name").arg.len == 0
     check parseSlash("/name Fix parser").kind == slName
@@ -1356,6 +1480,8 @@ suite "slash commands":
     check "takes no arguments" in commandError("/reload extra")
     check resumeOpensPicker("/resume")
     check not resumeOpensPicker("/resume abc")
+    check forkOpensPicker("/fork")
+    check not forkOpensPicker("/fork 1")
     check not resumeOpensPicker("hello")
     check commandError("/models refresh") == ""
     check "did you mean /models refresh" in commandError("/model refresh")
@@ -1519,6 +1645,23 @@ suite "slash commands":
     let desc = commandSuggestionDescription("/resume abc123", root, root)
     check "fix the parser" in desc
     check "/resume [ID]" in commandSuggestions("/resume")
+
+  test "fork suggestions list user messages with previews":
+    let root = freshDir()
+    defer: removeDir(root)
+    var sess = initSession(root / "current.jsonl", "current")
+    sess.addUserMessage("first question")
+    sess.addAssistantResponse(ProviderResponse(content: @[text("answer")]))
+    sess.addUserMessage("second question")
+    let choices = sess.forkChoices
+    check commandSuggestions("/fork", root, root, ModelPicker(), -1,
+      choices) == @["/fork 1", "/fork 2"]
+    check commandSuggestions("/fork ", root, root, ModelPicker(), -1,
+      choices) == @["/fork 1", "/fork 2"]
+    check commandSuggestions("/fork 2", root, root, ModelPicker(), -1,
+      choices) == @["/fork 2"]
+    check commandSuggestionDescription("/fork 2", root, root, choices) ==
+      "second question"
 
   test "edit hunk replaces ok body; write is all plus":
     let input = %*{"old_text": "before", "new_text": "after"}
@@ -2245,6 +2388,39 @@ suite "composer and cost":
     # uncached 500k * $1 + cache 500k * $0.1 = $0.55
     check abs(estimateUsageCost("openrouter", "priced/model", cached) - 0.55) < 0.0001
     check formatUsageCost("openrouter", "missing", usage).len == 0
+
+  test "status footer shows total session cost":
+    let root = freshDir()
+    defer: removeDir(root)
+    let cache = root / "models-dev.json"
+    writeFile(cache, $(%*{
+      "openrouter": {
+        "models": {
+          "priced/model": {
+            "limit": {"context": 1000},
+            "cost": {"input": 1.0, "output": 0.0}
+          }
+        }
+      }
+    }))
+    setModelsDevCachePath(cache)
+    defer: setModelsDevCachePath("")
+    var session = initSession()
+    for i in 0 ..< 2:
+      session.addAssistantResponse(ProviderResponse(model: "priced/model",
+        usage: Usage(inputTokens: 1_000_000, outputTokens: 0),
+        content: @[text("hi")]), provider = "openrouter",
+        requestedModel = "priced/model")
+    var agent = Agent(config: AgentConfig(provider: "openrouter",
+      model: "priced/model"), session: session)
+    # $1 per response, so the footer must show $2.00 rather than the latest $1.00.
+    check "$2.00" in agent.statusFooter
+    var output = ""
+    var ui = consoleSink()
+    ui.emit = proc (level: MsgLevel, value: string) = output.add value
+    check agent.processInput("/stats", ui)
+    check "Latest cost: $1.00" in output
+    check "Session cost: $2.00" in output
 
 suite "file mentions":
   test "mentionAt finds @path and ignores emails":

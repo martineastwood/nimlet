@@ -72,6 +72,23 @@ proc writeFileAtomic*(path, content: string) =
     removeFile(tmp)
     raise e
 
+proc gitWorkspaceDirty*(root: string): bool =
+  if root.len == 0 or
+      (not dirExists(root / ".git") and not fileExists(root / ".git")):
+    return false
+  var process: Process
+  try:
+    process = startProcess("git", workingDir = root,
+      args = ["status", "--porcelain", "--untracked-files=all", "--", "."],
+      options = {poUsePath, poStdErrToStdOut})
+  except CatchableError:
+    return false
+  defer: process.close()
+  let output = process.outputStream.readAll()
+  if process.waitForExit() != 0:
+    return false
+  output.strip.len > 0
+
 const
   mentionFileCap* = 50
   mentionDirCap = 200

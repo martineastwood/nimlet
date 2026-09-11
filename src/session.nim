@@ -55,6 +55,11 @@ type
     name*: string         ## /name if set
     workspace*: string
 
+  ForkChoice* = object
+    eventIndex*: int
+    text*: string
+    preview*: string
+
   SessionListCache = object
     sessionDir: string
     workspace: string
@@ -446,6 +451,48 @@ proc loadSession*(sessionDir: string, id = "", workspace = ""): Session =
     raise newException(ValueError, err)
   initSession(path, id)
 
+proc forkSession*(session: Session, eventIndex: int,
+                  sessionDir = ""): Session =
+  ## Copy the linear prefix before a user message into a new session file.
+  if eventIndex < 0 or eventIndex >= session.events.len or
+      session.events[eventIndex].kind != sekUser:
+    raise newException(ValueError, "Fork message not found.")
+  let parent = if session.path.len > 0: session.path.parentDir else: sessionDir
+  if parent.len == 0:
+    raise newException(ValueError, "Cannot fork a session without a directory.")
+  result = initSession()
+  result.path = parent / (result.id & ".jsonl")
+  result.workspace = session.workspace
+  if eventIndex > 0:
+    result.events = session.events[0 ..< eventIndex]
+  for event in result.events:
+    if event.kind == sekName:
+      result.name = event.sessionName
+  createDir(parent)
+  let file = open(result.path, fmWrite)
+  defer: file.close()
+  if result.workspace.len > 0:
+    file.writeLine(%*{"type": "session", "workspace": result.workspace})
+  for event in result.events:
+    file.writeLine(eventJson(event))
+  persistSessionFile(file)
+  clearSessionListCache()
+
+proc sessionMessageText*(message: Message): string =
+  for part in message.content:
+    case part.kind
+    of ckText:
+      if result.len > 0: result.add "\n"
+      result.add part.text
+    of ckImage:
+      if result.len > 0: result.add "\n"
+      result.add "[image]"
+    of ckFile:
+      if result.len > 0: result.add "\n"
+      result.add "[file]"
+    else:
+      discard
+
 proc tryLoadSession*(sessionDir: string, id: string):
                     tuple[ok: bool, session: Session, err: string] =
   let path = sessionDir / (id & ".jsonl")
@@ -469,6 +516,13 @@ proc clipPreview(text: string, maxRunes = 48): string =
   if nl >= 0: one = one[0 ..< nl].strip
   if runeLen(one) <= maxRunes: return one
   runeSubStr(one, 0, maxRunes - 1) & "…"
+
+proc forkChoices*(session: Session): seq[ForkChoice] =
+  for i, event in session.events:
+    if event.kind != sekUser: continue
+    let text = sessionMessageText(event.message)
+    result.add ForkChoice(eventIndex: i, text: text,
+      preview: clipPreview(if text.len > 0: text else: "[attachment]"))
 
 proc belongsToWorkspace(fileWorkspace, wanted: string): bool =
   wanted.len == 0 or fileWorkspace == wanted

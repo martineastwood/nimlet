@@ -89,10 +89,12 @@ type
     weExited, weTimeout, weCancelled
 
 proc waitForChildAsync*(p: Process, timeout: int,
-                        shouldCancel: CancelCheck = nil):
+                        shouldCancel: CancelCheck = nil,
+                        onPoll: proc () {.closure.} = nil):
                       Future[tuple[endKind: WaitEnd, exitCode: int]] {.async.} =
   let deadline = epochTime() + timeout.float
   while true:
+    if not onPoll.isNil: onPoll()
     let code = p.peekExitCode()
     if code != -1:
       return (weExited, code)
