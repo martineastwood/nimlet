@@ -265,6 +265,7 @@ them; clean Nimlet exit sends `shutdown`.
 `response_timeout_seconds` defaults to 30, accepts a positive integer, and may
 be `null` for no timeout. The same asynchronous request path is used for
 commands and tools, so long-running extensions keep the UI responsive.
+Responses are routed by ID, allowing concurrent requests.
 
 Any response may also carry host actions:
 
@@ -283,6 +284,15 @@ Status and widget keys are automatically namespaced to the extension. Returning
 an empty status `text` or empty widget `lines` clears that item. `entry` is
 appended to the session under the extension's name and never enters model
 context.
+
+Extensions may publish the same actions at any time without a request:
+
+```json
+{"type":"update","status":{"key":"agent","text":"researching"}}
+```
+
+One blocking reader per extension wakes the UI immediately without polling the
+child process or consuming idle CPU.
 
 While handling a request, an extension may ask the user and then continue:
 

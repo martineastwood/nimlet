@@ -3,6 +3,7 @@
 import std/[asyncdispatch, json, locks, os, osproc, posix, streams, strutils,
   tables, times]
 import config
+import extensions
 import nimgent
 import tools/tool
 import hooks
@@ -60,12 +61,13 @@ type
     notices: seq[ExtensionNotice]
     entries: seq[ExtensionEntry]
     question*: ExtensionQuestionProc
-    onUpdate*: proc() {.closure, gcsafe.}
+    onUpdate: proc() {.closure, gcsafe.}
     nextId: int
     inboxLock: Lock
     inbox: seq[IncomingMessage]
     responses: Table[string, JsonNode]
     questions: seq[Future[void]]
+    questionCompletedAt: float
 
 proc commandSpec(path: string): tuple[ok: bool, name: string,
     command: seq[string], timeoutMs: int, err: string] =
@@ -130,6 +132,12 @@ proc stringField(node: JsonNode, key: string): string =
   let value = node.getOrDefault(key)
   if not value.isNil and value.kind == JString: value.getStr else: ""
 
+proc stringArray(node: JsonNode, key: string): seq[string] =
+  let values = node.getOrDefault(key)
+  if values.isNil or values.kind != JArray: return
+  for value in values:
+    if value.kind == JString: result.add value.getStr
+
 proc captureActions(runtime: ExtensionRuntime, extension: int,
                     response: JsonNode) =
   let namespace = runtime.processes[extension].name
@@ -142,14 +150,10 @@ proc captureActions(runtime: ExtensionRuntime, extension: int,
   let widget = response.getOrDefault("widget")
   if not widget.isNil and widget.kind == JObject:
     let key = widget.stringField("key")
-    var lines: seq[string]
-    let sourceLines = widget.getOrDefault("lines")
-    if not sourceLines.isNil and sourceLines.kind == JArray:
-      for line in sourceLines:
-        if line.kind == JString: lines.add line.getStr
     if key.len > 0:
       runtime.setWidget ExtensionWidget(key: namespace & ":" & key,
-        lines: lines, placement: widget.stringField("placement"))
+        lines: widget.stringArray("lines"),
+        placement: widget.stringField("placement"))
   let notice = response.getOrDefault("notification")
   if not notice.isNil and notice.kind == JObject:
     let message = notice.stringField("message")
@@ -172,9 +176,11 @@ proc readMessages(args: ReaderArgs) {.thread.} =
       let line = args.runtime.processes[args.extension].process.outputStream.readLine()
       if line.len == 0: break
       let message = parseJson(line)
+      var update: proc() {.closure, gcsafe.}
       withLock args.runtime.inboxLock:
         args.runtime.inbox.add (args.extension, message)
-      if not args.runtime.onUpdate.isNil: args.runtime.onUpdate()
+        update = args.runtime.onUpdate
+      if not update.isNil: update()
     except CatchableError:
       break
 
@@ -257,16 +263,18 @@ proc stop*(runtime: ExtensionRuntime) =
 
 proc answerQuestion(runtime: ExtensionRuntime, extension: int,
                     request: JsonNode): Future[void] {.async.} =
-  var options: seq[string]
-  let sourceOptions = request.getOrDefault("options")
-  if not sourceOptions.isNil and sourceOptions.kind == JArray:
-    for option in sourceOptions:
-      if option.kind == JString: options.add option.getStr
+  let options = request.stringArray("options")
   let answer = if runtime.question.isNil: ""
     else: await runtime.question(request.getOrDefault("prompt").getStr, options)
   runtime.processes[extension].process.send(%*{"type": "ui_response",
     "id": request.getOrDefault("id").getStr, "answer": answer,
     "cancelled": answer.len == 0})
+  runtime.questionCompletedAt = epochTime()
+
+proc setOnUpdate*(runtime: ExtensionRuntime,
+                  callback: proc() {.closure, gcsafe.}) =
+  if runtime.isNil: return
+  withLock runtime.inboxLock: runtime.onUpdate = callback
 
 proc pump*(runtime: ExtensionRuntime) =
   if runtime.isNil: return
@@ -304,7 +312,8 @@ proc requestAsync(runtime: ExtensionRuntime, extension: int,
       ext.process.send(%*{"type": "cancel", "id": message["id"]})
       raise newException(IOError, "extension request cancelled")
     if runtime.questions.len == 0 and ext.timeoutMs >= 0 and
-        int((epochTime() - started) * 1000) >= ext.timeoutMs:
+        int((epochTime() - max(started, runtime.questionCompletedAt)) * 1000) >=
+          ext.timeoutMs:
       raise newException(IOError, "extension response timed out")
     await sleepAsync(25)
 
@@ -317,17 +326,13 @@ proc invoke*(runtime: ExtensionRuntime, name,
     result = await runtime.requestAsync(command.extension,
       %*{"type": "command", "id": id, "name": command.name,
         "arguments": arguments})
-    if result.getOrDefault("type").getStr != "response" or
-        result.getOrDefault("id").getStr != id:
-      raise newException(ValueError, "invalid extension response")
     return
   raise newException(ValueError, "unknown extension command: " & name)
 
 proc registerTools*(runtime: ExtensionRuntime, registry: var ToolRegistry) =
   if runtime.isNil: return
   for tool in runtime.tools:
-    if tool.definition.name.toLowerAscii in
-        ["ask_user", "bash", "edit", "glob", "grep", "read", "read_skill", "write"]:
+    if isBuiltinName(tool.definition.name):
       runtime.warnings.add "extension tool '" & tool.definition.name &
         "' collides with a built-in tool"
       continue
@@ -338,9 +343,6 @@ proc registerTools*(runtime: ExtensionRuntime, registry: var ToolRegistry) =
       let response = await runtime.requestAsync(registered.extension,
         %*{"type": "tool", "id": id, "name": registered.definition.name,
           "arguments": input})
-      if response.getOrDefault("type").getStr != "response" or
-          response.getOrDefault("id").getStr != id:
-        return ToolResult(output: "invalid extension response", isError: true)
       return ToolResult(output: response.getOrDefault("content").getStr,
         isError: response.getOrDefault("is_error").getBool)
     registry.register(registered.definition, run)
@@ -376,9 +378,6 @@ proc dispatch*(runtime: ExtensionRuntime, event: HookEvent,
     try:
       response = await runtime.requestAsync(i,
         %*{"type": "event", "id": id, "event": $event, "payload": payload})
-      if response.getOrDefault("type").getStr != "response" or
-          response.getOrDefault("id").getStr != id:
-        raise newException(ValueError, "invalid extension response")
     except CatchableError as e:
       result.warnings.add "extension '" & extension.name & "': " & e.msg
       continue

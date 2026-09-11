@@ -3141,6 +3141,55 @@ read shutdown
     check asked
     check messages == @["choice received"]
 
+  test "routes concurrent responses by id":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "parallel")
+    let dir = root / ".nimlet" / "extensions" / "parallel"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "parallel", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[{"name":"parallel","description":"Parallel"}]}'
+read first
+read second
+echo '{"type":"response","id":"2","message":"second"}'
+echo '{"type":"response","id":"1","message":"first"}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    let runtime = startExtensions(root, "session")
+    defer: runtime.stop()
+    let first = runtime.invoke("parallel", "one")
+    let second = runtime.invoke("parallel", "two")
+    discard waitFor first
+    discard waitFor second
+    check first.read["message"].getStr == "first"
+    check second.read["message"].getStr == "second"
+
+  test "accepts unsolicited progress actions":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "progress")
+    let dir = root / ".nimlet" / "extensions" / "progress"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "progress", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[]}'
+echo '{"type":"update","status":{"key":"job","text":"working"},"notification":{"level":"info","message":"started"}}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    let runtime = startExtensions(root, "session")
+    defer: runtime.stop()
+    waitFor sleepAsync(25)
+    runtime.pump()
+    check runtime.statusTexts == @["working"]
+    check runtime.takeNotices[0].message == "started"
+
 when false: # Removed hook.json regression suite; persistent extensions supersede it.
   test "plan mode suppresses command hooks while act mode restores them":
     let root = freshDir()

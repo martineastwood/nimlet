@@ -60,6 +60,11 @@ proc refreshFooter(controller: NimletController,
     controller.agent[].extensionRuntime.widgetLines
   controller.screen.footer = controller.screen.statusLine(controller.agent[].statusFooter(width))
 
+proc processExtensionUpdates(controller: NimletController) =
+  controller.agent[].extensionRuntime.pump()
+  controller.agent.applyExtensionActions(controller.ui)
+  controller.refreshFooter()
+
 proc drainCancelPipe(controller: NimletController) =
   if controller.cancelRead < 0: return
   var bytes: array[64, char]
@@ -273,6 +278,9 @@ proc finishTurn(controller: NimletController, keepRunning, succeeded: bool) =
 
 proc handleEvent*(controller: NimletController,
                   event: UiEvent): EventResponse =
+  if event.kind == uiTimer and event.timerId == "extensions":
+    controller.processExtensionUpdates()
+    return eventHandled
   if event.kind == uiError:
     if not event.cancelled:
       controller.screen.transcript.apply AgentUiEvent(kind: ueError,
@@ -352,6 +360,8 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
   screen.forkChoices = agent[].session.forkChoices
   result.refreshFooter()
   result.ui = previewSink(result)
+  agent[].extensionRuntime.setOnUpdate proc() {.gcsafe.} =
+    app[].post UiEvent(kind: uiTimer, timerId: "extensions")
   result.turns.onFinish = proc (keepRunning, succeeded: bool) =
     controller.finishTurn(keepRunning, succeeded)
   app[].addSource(result.turns)
@@ -361,6 +371,7 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
     controller.handleAction(running, action)
 
 proc close*(controller: NimletController) =
+  controller.agent[].extensionRuntime.setOnUpdate(nil)
   if controller.cancelRead >= 0:
     discard posix.close(controller.cancelRead)
     controller.cancelRead = -1

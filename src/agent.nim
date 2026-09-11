@@ -262,7 +262,7 @@ proc reportLines(ui: TurnSink, level: MsgLevel, lines: openArray[string],
     else:
       stderr.writeLine text
 
-proc applyExtensionActions(agent: ptr Agent, ui: TurnSink) =
+proc applyExtensionActions*(agent: ptr Agent, ui: TurnSink) =
   for entry in agent.extensionRuntime.takeEntries:
     agent[].session.addExtensionEntry(entry.extension, entry.data)
   for notice in agent.extensionRuntime.takeNotices:
@@ -373,8 +373,7 @@ proc compactionPoll(ui: TurnSink): StreamCallback =
     not ui.wasInterrupted()
 
 proc runLifecycle(agent: ptr Agent, event: HookEvent, payload: JsonNode,
-                  ui: TurnSink, toolName = ""): Future[HookOutcome] {.async.} =
-  discard toolName
+                  ui: TurnSink): Future[HookOutcome] {.async.} =
   if agent.mode == modePlan: return HookOutcome(allowed: true)
   result = await agent.extensionRuntime.dispatch(event, payload)
   agent.applyExtensionActions(ui)
@@ -723,15 +722,14 @@ proc executeParallelReadOnly(agent: ptr Agent, call: ContentBlock,
     return await agent.planTools.execute(call.name, call.input)
   var args = if call.input.isNil: newJObject() else: call.input
   let pre = await agent.runLifecycle(hePreToolCall,
-    preToolPayload(call.name, args), ui, call.name)
+    preToolPayload(call.name, args), ui)
   if not pre.allowed:
     return toolFailure("approval_denied", pre.reason)
   if not pre.arguments.isNil:
     args = pre.arguments
   result = await agent.tools.execute(call.name, args)
   let post = await agent.runLifecycle(hePostToolCall,
-    postToolPayload(call.name, args, result.output, result.isError), ui,
-    call.name)
+    postToolPayload(call.name, args, result.output, result.isError), ui)
   if post.hasOutput: result.output = post.output
   if post.hasIsError: result.isError = post.isError
 
@@ -916,7 +914,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
           toolResult = toolFailure("approval_denied", "Tool execution was denied.")
         else:
           let pre = await agent.runLifecycle(hePreToolCall,
-            preToolPayload(call.name, args), ui, call.name)
+            preToolPayload(call.name, args), ui)
           if not pre.allowed:
             toolResult = toolFailure("approval_denied", pre.reason)
           else:
@@ -931,7 +929,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
                 toolOutput: output)))
             let post = await agent.runLifecycle(hePostToolCall,
               postToolPayload(call.name, args, toolResult.output,
-                toolResult.isError), ui, call.name)
+                toolResult.isError), ui)
             if post.hasOutput:
               toolResult.output = post.output
             if post.hasIsError:
