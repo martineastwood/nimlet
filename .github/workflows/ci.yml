@@ -36,4 +36,4 @@ jobs:
 
       - name: Run tests
         # Run from the checkout so nim.cfg keeps the sibling source paths.
-        run: nim c -r --hints:off tests/all_tests.nim
+        run: nim c -r --hints:off --threads:on --mm:atomicArc tests/all_tests.nim

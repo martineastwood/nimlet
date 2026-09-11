@@ -3,7 +3,9 @@
 ## At startup we only read manifests. The executable runs only when invoked.
 ## runExtension is public so lifecycle hooks can reuse the same protocol later.
 
-import std/[algorithm, asyncdispatch, json, os, osproc, posix, strformat, strutils, times]
+import std/[algorithm, asyncdispatch, json, os, osproc, strformat, strutils, times]
+when not defined(linux):
+  import posix
 import config
 import nimgent
 import childproc
