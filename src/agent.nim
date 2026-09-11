@@ -80,14 +80,18 @@ type
     ## Startup warnings from hook discovery (invalid manifests).
     hookWarnings*: seq[string]
 
-proc statusFooter*(agent: Agent): string =
-  ## Interactive status-bar text: model, usage, context fill, thinking.
+proc statusFooter*(agent: Agent, maxWidth = int.high): string =
+  ## Add fields by priority, skipping optional detail that does not fit.
   const
     modeWidth = 6
     usageWidth = 8
   proc column(text: string, width: int): string =
     text & " ".repeat(max(0, width - ansiVisibleWidth(text)))
   var parts: seq[string] = @[]
+  proc add(text: string) =
+    let width = ansiVisibleWidth(text) + (if parts.len == 0: 0 else: 3)
+    if ansiVisibleWidth(parts.join(" · ")) + width <= maxWidth:
+      parts.add text
   parts.add column("[" & $agent.mode & "]", modeWidth)
   let t = currentTheme
   if agent.yolo:
@@ -95,17 +99,9 @@ proc statusFooter*(agent: Agent): string =
   let (found, storedModel, usage) = agent.session.lastAssistant
   let model = if agent.config.model.len > 0: agent.config.model else: storedModel
   let usageModel = if storedModel.len > 0: storedModel else: model
-  if model.len > 0:
-    parts.add t.paint(t.model, model)
   if found:
-    let labels = formatUsageLabels(usage)
-    for label in labels:
-      parts.add column(t.paint(t.dim, label), usageWidth)
-    let cost = formatUsageCost(agent.config.provider, usageModel, usage)
-    if cost.len > 0:
-      parts.add t.paint(t.dim, cost)
     let window = agent.config.effectiveContextWindow
-    if labels.len > 0 and window > 0:
+    if window > 0:
       let used = contextTokens(usage)
       if used > 0:
         let pct = min(100, used * 100 div window)
@@ -114,16 +110,53 @@ proc statusFooter*(agent: Agent): string =
           elif pct >= 70: t.warning
           else: t.dim
         parts.add t.paint(color, "ctx " & $pct & "%")
+  if model.len > 0:
+    add t.paint(t.model, model)
+  if found:
+    let cost = formatUsageCost(agent.config.provider, usageModel, usage)
+    if cost.len > 0:
+      add t.paint(t.dim, cost)
+    let labels = formatUsageLabels(usage)
+    for label in labels:
+      add column(t.paint(t.dim, label), usageWidth)
   let level = thinkingStatus(agent.config)
   if level == "off":
-    parts.add t.paint(t.dim, "think:off")
+    add t.paint(t.dim, "think:off")
   elif level.len > 0:
-    parts.add t.paint(t.warning, "think:" & level)
+    add t.paint(t.warning, "think:" & level)
   if webSearchActive(agent.config):
-    parts.add t.paint(t.warning, "web")
+    add t.paint(t.warning, "web")
   elif agent.config.webSearch:
-    parts.add t.paint(t.dim, "web:n/a")
+    add t.paint(t.dim, "web:n/a")
   parts.join(" · ")
+
+proc statsReport(agent: Agent): string =
+  let (found, storedModel, usage) = agent.session.lastAssistant
+  let model = if agent.config.model.len > 0: agent.config.model else: storedModel
+  result = "Provider: " & agent.config.provider & "\nModel: " & model
+  if not found:
+    result.add "\nUsage: no responses yet"
+    return
+  result.add "\nLatest: " & formatUsageLabels(usage).join("  ")
+  let window = agent.config.effectiveContextWindow
+  if window > 0:
+    result.add "\nContext: " & $contextTokens(usage) & " / " & $window &
+      " (" & $min(100, contextTokens(usage) * 100 div window) & "%)"
+  let cost = formatUsageCost(agent.config.provider,
+    if storedModel.len > 0: storedModel else: model, usage)
+  if cost.len > 0: result.add "\nLatest cost: " & cost
+  var total = Usage()
+  var totalCost = 0.0
+  var priced = false
+  for event in agent.session.events:
+    if event.kind == sekAssistant:
+      total.addUsage(event.usage)
+      let eventModel = if event.model.len > 0: event.model else: event.requestedModel
+      if formatUsageCost(event.provider, eventModel, event.usage).len > 0:
+        totalCost += estimateUsageCost(event.provider, eventModel, event.usage)
+        priced = true
+  result.add "\nSession: " & formatUsageLabels(total).join("  ")
+  if priced: result.add "\nSession cost: " & formatUsd(totalCost)
 
 proc attachProvider(agent: var Agent) =
   case agent.config.provider.toLowerAscii
@@ -410,6 +443,8 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
     ui.onChange()
   of slHelp:
     ui.emit(mlPlain, renderMarkdown(helpText().strip, currentTheme.colorsOn))
+  of slStats:
+    ui.emit(mlPlain, agent[].statsReport)
   of slDoctor:
     ui.emit(mlPlain, doctorReport(agent.config))
     if cmd.arg == "test":

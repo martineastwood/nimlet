@@ -38,7 +38,7 @@ type
     appliedThemeRevision: int
     stylesReady: bool
 const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-const statusActivityWidth = 26
+const statusActivityWidth = 12
 method focusable*(screen: NimtermScreen): bool = true
 
 method children*(screen: NimtermScreen): seq[Widget] =
@@ -58,6 +58,10 @@ proc statusLine*(screen: NimtermScreen, status: string): string =
     activity
   prefix & " ".repeat(max(0, statusActivityWidth - ansiVisibleWidth(prefix))) &
     " · " & status
+
+proc statusWidth*(screen: NimtermScreen): int =
+  if screen.area.w == 0: int.high
+  else: max(0, screen.area.w - statusActivityWidth - 3)
 
 proc workingFooter*(screen: NimtermScreen, status: string): string =
   screen.statusLine(status)
@@ -511,7 +515,8 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
   let h = screen.area.h
   let w = screen.area.w
   if h <= 0 or w <= 0: return
-  let headerHeight = min(max(1, screen.header.body.splitLines.len + 1), h)
+  let headerHeight = screen.header.measure(Constraints(
+    minSize: size(w, 0), maxSize: size(w, h))).h
   screen.refreshMenuTheme()
   screen.header.render(canvas, rect(0, 0, w, headerHeight))
   screen.paintHeaderSelection(canvas)

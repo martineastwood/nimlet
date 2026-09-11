@@ -257,6 +257,10 @@ suite "black-box terminal integration":
     check "startup-model" in backend.frame.plainText
     check "#" & agent.session.id notin backend.frame.plainText
 
+  test "banner shortens the home directory":
+    check displayPath(getHomeDir() / "repos" / "project") ==
+      "~" / "repos" / "project"
+
   test "session id can be selected from the banner":
     let root = freshDir()
     defer: removeDir(root)
@@ -923,9 +927,35 @@ suite "persistent agent sessions":
     check "↓4" in status
     check "R8" in status
     check "ctx 10%" in status
+    check status.find("ctx 10%") < status.find("fallback")
     check "status1" notin status
     check " · " in status
     check status.find(" · ") > 0
+
+  test "narrow status drops optional fields cleanly":
+    var agent = Agent(mode: modeAct, yolo: true,
+      config: AgentConfig(model: "a-very-long-model-name"))
+    let status = agent.statusFooter(20)
+    check "[act]" in status
+    check "[yolo]" in status
+    check "a-very-long-model-name" notin status
+
+  test "stats shows detailed usage on demand":
+    var session = initSession()
+    session.addAssistantResponse(ProviderResponse(model: "test/model",
+      usage: Usage(inputTokens: 10, outputTokens: 4), content: @[text("hi")]))
+    var agent = Agent(config: AgentConfig(provider: "openrouter",
+      model: "test/model", contextWindow: 100), session: session)
+    var output = ""
+    var ui = consoleSink()
+    ui.emit = proc (level: MsgLevel, value: string) = output.add value
+    check parseSlash("/stats").kind == slStats
+    check parseSlash("/stats now").kind == slError
+    check agent.processInput("/stats", ui)
+    check "Provider: openrouter" in output
+    check "Latest: ↑10" in output
+    check "Context: 10 / 100 (10%)" in output
+    check "Session: ↑10" in output
 
   test "context percent uses anthropic-style split totals":
     var usage = Usage(inputTokens: 100, outputTokens: 1, cacheReadTokens: 900,

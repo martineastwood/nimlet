@@ -69,7 +69,7 @@ proc requestInterrupt(controller: NimletController) =
   controller.signalCancel()
   controller.screen.activity = "Stopping…"
   controller.screen.footer = controller.screen.statusLine(
-    controller.agent[].statusFooter)
+    controller.agent[].statusFooter(controller.screen.statusWidth))
 
 proc previewSink(controller: NimletController): TurnSink =
   let screen = controller.screen
@@ -86,7 +86,7 @@ proc previewSink(controller: NimletController): TurnSink =
     for item in screen.transcript.transcript.items:
       if item.id == id: return item.expanded
   proc refresh(force = true) =
-    screen.footer = screen.statusLine(agent[].statusFooter)
+    screen.footer = screen.statusLine(agent[].statusFooter(screen.statusWidth))
     app[].invalidate()
     app[].flush(force)
   proc flushPendingDelta() =
@@ -220,7 +220,7 @@ proc resetInteraction(controller: NimletController) =
   controller.approvalFuture = nil
   screen.activity = ""
   screen.modelPicker = modelPickerFrom(controller.agent[])
-  screen.footer = screen.statusLine(controller.agent[].statusFooter)
+  screen.footer = screen.statusLine(controller.agent[].statusFooter(screen.statusWidth))
   controller.app[].focus(screen)
   controller.app[].invalidate()
 
@@ -235,7 +235,7 @@ proc startSubmission*(controller: NimletController, text: string) =
   controller.interruptRequested = false
   screen.activity = "Thinking…"
   screen.spinnerStartedAt = epochTime()
-  screen.footer = screen.statusLine(controller.agent[].statusFooter)
+  screen.footer = screen.statusLine(controller.agent[].statusFooter(screen.statusWidth))
   screen.transcript.appendUser(text)
   controller.turns.active = processInputAsync(controller.agent, text,
     controller.ui)
@@ -265,6 +265,9 @@ proc handleEvent*(controller: NimletController,
         runId: controller.agent[].session.id & ":turn:error", error: event.error)
     controller.resetInteraction()
     return eventHandled
+  if event.kind == uiResize:
+    controller.screen.footer = controller.screen.statusLine(
+      controller.agent[].statusFooter(max(0, event.width - 15)))
   if controller.screen.busy and event.kind == uiKey and event.key == keyCtrlC:
     controller.requestInterrupt()
     if not controller.questionFuture.isNil and
@@ -310,7 +313,7 @@ proc handleAction*(controller: NimletController, running: var App,
     of "toggle-mode":
       controller.agent[].mode = if controller.agent[].mode == modeAct:
         modePlan else: modeAct
-      screen.footer = screen.statusLine(controller.agent[].statusFooter)
+      screen.footer = screen.statusLine(controller.agent[].statusFooter(screen.statusWidth))
     of "queue": controller.queuedInput = action.value
     of "queue-mode-toggle":
       controller.modeSwitchPending = not controller.modeSwitchPending
@@ -331,7 +334,7 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
     discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
     discard fcntl(result.cancelWrite, F_SETFL, O_NONBLOCK)
   let controller = result
-  screen.footer = screen.statusLine(agent[].statusFooter)
+  screen.footer = screen.statusLine(agent[].statusFooter(screen.statusWidth))
   result.ui = previewSink(result)
   result.turns.onFinish = proc (keepRunning, succeeded: bool) =
     controller.finishTurn(keepRunning, succeeded)

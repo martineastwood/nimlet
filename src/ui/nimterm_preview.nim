@@ -1,6 +1,6 @@
 ## Assemble nimlets controller and screen on the POSIX backend.
 
-import std/times
+import std/[os, strutils, times]
 import nimterm/[app, backend, widgets]
 import nimterm/platform_posix
 import ../agent
@@ -9,9 +9,15 @@ import nimterm_screen
 
 export nimterm_controller, nimterm_screen
 
+proc displayPath*(path: string): string =
+  let home = getHomeDir().strip(leading = false, chars = {DirSep})
+  if path == home: "~"
+  elif path.startsWith(home & DirSep): "~" & path[home.len .. ^1]
+  else: path
+
 proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
-  var body = "Workspace: " & agent.config.workspace &
-    " · Session: " & agent.session.id
+  var body = "Session: " & agent.session.id & "\nWorkspace: " &
+    displayPath(agent.config.workspace)
   if catalogNote.len > 0: body.add "\n" & catalogNote
   let screen = newNimtermScreen(body, agent.config.workspace,
     agent.config.sessionDir, modelPickerFrom(agent), agent.session.id)
@@ -30,7 +36,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
   app.render()
   if agent.session.events.len > 0:
     screen.replaySession(agent.session)
-    screen.footer = screen.statusLine(agent.statusFooter)
+    screen.footer = screen.statusLine(agent.statusFooter(screen.statusWidth))
     app.invalidate()
     app.render()
   if initialPrompt.len > 0:
@@ -45,7 +51,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
       if screen.busy:
         lastSpinnerFrame = int(max(0.0, epochTime() -
           screen.spinnerStartedAt) * 12.0) mod 10
-        screen.footer = screen.statusLine(agent.statusFooter)
+        screen.footer = screen.statusLine(agent.statusFooter(screen.statusWidth))
       app.invalidate()
     ## step() returns before flushing when the backend had no event. Flush here
     ## so dirty status/footer changes are not held until the next keypress.

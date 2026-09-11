@@ -22,6 +22,7 @@ type
     slPlan
     slAct
     slYolo
+    slStats
     slDoctor
     slModel
     slModelsRefresh
@@ -62,6 +63,8 @@ const CommandSpecs* = [
     description: "enable implementation tools"),
   CommandSpec(kind: slYolo, name: "/yolo", usage: "/yolo [on|off]",
     description: "auto-approve tools for this process"),
+  CommandSpec(kind: slStats, name: "/stats", usage: "/stats",
+    description: "show model, context, token usage, and cost"),
   CommandSpec(kind: slDoctor, name: "/doctor", usage: "/doctor [test]",
     description: "show configuration and key status; optionally test the connection"),
   CommandSpec(kind: slHelp, name: "/help", usage: "/help",
@@ -109,7 +112,7 @@ proc helpText*(): string =
   const groupKinds: array[6, seq[SlashKind]] = [
     @[slPlan, slAct, slHelp],
     @[slModel, slModelsRefresh, slThinking, slProvider, slWeb],
-    @[slSession, slNew, slResume, slName, slCompact],
+    @[slSession, slStats, slNew, slResume, slName, slCompact],
     @[slYolo, slPermissions],
     @[slTheme],
     @[slDoctor, slReload, slQuit],
@@ -207,7 +210,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   of slDoctor:
     if parts.len > 2 or (parts.len == 2 and parts[1] != "test"):
       return fail("Usage: /doctor [test]")
-  of slHelp, slPlan, slAct, slSession, slNew, slQuit, slReload:
+  of slHelp, slPlan, slAct, slStats, slSession, slNew, slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
   of slProvider:
