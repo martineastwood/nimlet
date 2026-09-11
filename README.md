@@ -10,6 +10,8 @@ nimble test
 nimble idleSmoke   # ~60s at prompt; near-zero CPU (see scripts/idle_smoke.sh)
 ```
 
+Set `NIMTERM_PERF=1` when debugging frame and event-to-render latency.
+
 nimlet depends on the sibling [nimgent](../nimgent) package (LLM client
 library) and [nimterm](../nimterm) (terminal UI primitives). Local development
 resolves both via `nim.cfg`; with Docker Compose, `../nimgent` is mounted at

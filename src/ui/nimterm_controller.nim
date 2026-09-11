@@ -174,7 +174,10 @@ proc previewSink(controller: NimletController): TurnSink =
                     request: ProviderRequest): Future[ProviderResponse] {.async.} =
       screen.activity = "Waiting for model…"
       refresh()
-      return await streamTextAsync(provider, request, proc (event: StreamEvent): bool =
+      var liveRequest = request
+      liveRequest.wakeFd = controller.cancelRead
+      return await streamTextAsync(provider, liveRequest,
+        proc (event: StreamEvent): bool =
         case event.kind
         of seTextDelta:
           screen.activity = "Responding…"

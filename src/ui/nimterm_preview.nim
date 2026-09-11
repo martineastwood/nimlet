@@ -21,6 +21,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
   ## bypass this budget in App.step.
   app.minFrameIntervalMs = 16
   let controller = newNimletController(screen, addr app, addr agent)
+  defer: controller.close()
   app.backend.init()
   defer: app.backend.shutdown()
   app.running = true
