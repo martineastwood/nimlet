@@ -19,6 +19,9 @@ type
     menu*: Menu
     transcript*: TranscriptWidget
     composer*: InputWidget
+    searchInput*: InputWidget
+    searching*: bool
+    searchBefore*: string
     questionWidget*: QuestionWidget
     workspace*: string
     sessionDir*: string
@@ -120,6 +123,8 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
     transcript: newTranscriptWidget(),
     composer: newInput(style = composerStyle,
       cursorStyle = composerAccentStyle, cursorBarStyle = composerAccentStyle),
+    searchInput: newInput(prefix = "Search: ", style = composerStyle,
+      cursorStyle = composerAccentStyle, cursorBarStyle = composerAccentStyle),
     workspace: workspace,
     sessionDir: sessionDir,
     keybindings: if keybindings.isNil: newJObject() else: keybindings,
@@ -154,8 +159,11 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
   result.menu.id = "menu"
   result.transcript.id = "transcript"
   result.composer.id = "composer"
+  result.searchInput.id = "search"
   result.composer.paddingLeft = 2
   result.composer.paddingRight = 2
+  result.searchInput.paddingLeft = 2
+  result.searchInput.paddingRight = 2
   result.menu.style = panelStyle
   result.menu.selectedStyle = selectedStyle
   result.loadHistory()
@@ -284,6 +292,7 @@ proc refreshMenuTheme(screen: NimtermScreen) =
   screen.menu.borderStyle = t.themedStyle(t.accent)
   screen.menu.titleStyle = t.themedStyle(t.heading)
   screen.composer.style = t.themedStyle(t.text)
+  screen.searchInput.style = t.themedStyle(t.text)
   let composerAccentStyle = t.themedStyle(t.accent, "", {attrBold})
   when compiles(screen.composer.prefixStyle = composerAccentStyle):
     screen.composer.prefixStyle = composerAccentStyle
@@ -292,6 +301,10 @@ proc refreshMenuTheme(screen: NimtermScreen) =
   else:
     screen.composer.cursorStyle = composerAccentStyle
     screen.composer.cursorBarStyle = composerAccentStyle
+  screen.searchInput.cursorStyle = composerAccentStyle
+  screen.searchInput.cursorBarStyle = composerAccentStyle
+  when compiles(screen.searchInput.prefixStyle = composerAccentStyle):
+    screen.searchInput.prefixStyle = composerAccentStyle
   screen.transcript.userStyle = t.themedStyle(t.muted)
   screen.transcript.assistantStyle = t.themedStyle(t.text)
   screen.transcript.thinkingStyle = t.themedStyle(t.muted, "",
@@ -306,6 +319,7 @@ proc refreshMenuTheme(screen: NimtermScreen) =
   screen.headerSelectionStyle = screen.menu.selectedStyle
   screen.transcript.selectionStyle = t.themedStyle(t.selectedFg, t.selectedBg,
     {attrBold})
+  screen.transcript.searchStyle = t.themedStyle(t.selectedFg, t.selectedBg)
 
 proc headerSessionText(screen: NimtermScreen): string =
   if screen.headerSelectionStart < 0 or screen.headerSelectionEnd < 0:
@@ -397,6 +411,32 @@ proc acceptSuggestion(screen: NimtermScreen): bool =
   screen.refreshMenu()
   false
 
+proc selectedResumeSession(screen: NimtermScreen): string =
+  if not screen.composer.text.startsWith("/resume "):
+    return ""
+  if screen.menu.selected < 0 or screen.menu.selected >= screen.menu.items.len:
+    return ""
+  const prefix = "/resume "
+  let label = screen.menu.items[screen.menu.selected].label
+  if label.startsWith(prefix): result = label[prefix.len .. ^1].strip
+
+proc handleResumePickerShortcut(screen: NimtermScreen, event: UiEvent): bool =
+  let id = screen.selectedResumeSession()
+  if id.len == 0: return false
+  case event.key
+  of keyCtrlR:
+    screen.composer.setText("/session rename " & id & " ")
+    screen.refreshMenu()
+    true
+  of keyCtrlD:
+    screen.composer.setText("/session delete " & id)
+    screen.notice = "Press Enter to confirm moving " & id & " to trash"
+    screen.noticeUntil = epochTime() + 4.0
+    screen.refreshMenu()
+    true
+  else:
+    false
+
 proc historyPrevious(screen: NimtermScreen) =
   if screen.history.len == 0: return
   if screen.historyIndex < 0:
@@ -455,6 +495,43 @@ proc editorKey(screen: NimtermScreen, key: Key): Key =
 proc editExternal*(screen: NimtermScreen): ExternalEditResult =
   editTextExternally(screen.composer.text)
 
+proc beginSearch*(screen: NimtermScreen) =
+  screen.searchBefore = screen.transcript.searchQuery
+  screen.searching = true
+  screen.searchInput.setText(screen.searchBefore)
+
+proc finishSearch(screen: NimtermScreen, accept: bool) =
+  if not accept:
+    discard screen.transcript.setSearch(screen.searchBefore)
+  else:
+    let query = screen.searchInput.text.strip
+    let count = screen.transcript.setSearch(query)
+    screen.notice = if query.len == 0: "Search cleared"
+                    elif count == 0: "No transcript matches"
+                    else: $count & " transcript match" &
+                      (if count == 1: "" else: "es")
+    screen.noticeUntil = epochTime() + 2.0
+  screen.searching = false
+
+proc handleSearch(screen: NimtermScreen, event: UiEvent): EventResponse =
+  if event.kind != uiKey: return eventIgnored
+  case event.key
+  of keyEscape:
+    screen.finishSearch(false)
+  of keyEnter:
+    screen.finishSearch(true)
+  of keyCtrlN:
+    discard screen.transcript.nextSearch()
+  of keyCtrlP:
+    discard screen.transcript.nextSearch(backwards = true)
+  else:
+    var inputEvent = event
+    inputEvent.key = screen.editorKey(event.key)
+    let response = screen.searchInput.handle(inputEvent)
+    if response.handled:
+      discard screen.transcript.setSearch(screen.searchInput.text)
+  eventHandled
+
 method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
   if not screen.questionWidget.isNil:
     if event.kind == uiKey and event.key in {keyPageUp, keyPageDown}:
@@ -463,6 +540,8 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
       return screen.transcript.handle(event)
     if event.kind == uiMouse: return eventIgnored
     return screen.questionWidget.handle(event)
+  if screen.searching:
+    return screen.handleSearch(event)
   if event.kind == uiMouse:
     return screen.handleHeaderMouse(event)
   if event.kind == uiKey and event.key in {keyChar, keyEnter, keyEscape} and
@@ -525,6 +604,9 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
     return eventHandled
   if screen.bound("app.thinking.cycle", event.key):
     return screen.actionHandled("toggle-mode")
+  if event.key in {keyCtrlR, keyCtrlD} and
+      screen.handleResumePickerShortcut(event):
+    return eventHandled
   case inputKey
   of keyCopy:
     return screen.transcript.copySelection()
@@ -596,11 +678,12 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
   screen.refreshMenuTheme()
   screen.header.render(canvas, rect(0, 0, w, headerHeight))
   screen.paintHeaderSelection(canvas)
-  let textRows = screen.composer.visualLineCount(max(0, w -
-    screen.composer.paddingLeft - screen.composer.paddingRight))
+  let activeInput = if screen.searching: screen.searchInput else: screen.composer
+  let textRows = activeInput.visualLineCount(max(0, w -
+    activeInput.paddingLeft - activeInput.paddingRight))
   let verticalPadding = if textRows == 1: 1 else: 0
-  screen.composer.paddingTop = verticalPadding
-  screen.composer.paddingBottom = verticalPadding
+  activeInput.paddingTop = verticalPadding
+  activeInput.paddingBottom = verticalPadding
   let footerRow = h - 1
   let activityRows = if screen.questionWidget.isNil: 1 else: 0
   const inputRuleRows = 1
@@ -643,10 +726,13 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
       canvas.writeAnsiText(0, activityTop, screen.activityLine(), defaultStyle(), w)
     let ruleStyle = currentTheme.themedStyle(currentTheme.muted, "", {attrDim})
     canvas.writeText(0, inputTop, "─".repeat(w), ruleStyle, w)
-    screen.composer.render(canvas, rect(0, inputTop + inputRuleRows, w, inputRows))
+    activeInput.render(canvas, rect(0, inputTop + inputRuleRows, w, inputRows))
   if not screen.questionWidget.isNil:
     screen.questionWidget.render(canvas, rect(0, questionTop, w, questionHeight))
-  var footer = screen.footer
+  var footer = if screen.searching:
+    "Search · Enter accept · Esc cancel · Ctrl-N/P next/previous"
+  else:
+    screen.footer
   if screen.notice.len > 0:
     if epochTime() < screen.noticeUntil:
       footer = footer & " · " &

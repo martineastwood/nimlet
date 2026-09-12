@@ -88,8 +88,9 @@ const CommandSpecs* = [
     description: "show or set hosted web search"),
   CommandSpec(kind: slProvider, name: "/provider", usage: "/provider [name]",
     description: "show or set the provider"),
-  CommandSpec(kind: slSession, name: "/session", usage: "/session",
-    description: "show the current session"),
+  CommandSpec(kind: slSession, name: "/session",
+    usage: "/session [rename|delete|restore] ...",
+    description: "show or manage sessions"),
   CommandSpec(kind: slNew, name: "/new", usage: "/new",
     description: "start a new persistent session"),
   CommandSpec(kind: slCompact, name: "/compact", usage: "/compact [instructions]",
@@ -98,7 +99,7 @@ const CommandSpecs* = [
     description: "show or set project-local resource trust"),
   CommandSpec(kind: slPermissions, name: "/permissions", usage: "/permissions [clear]",
     description: "show or clear remembered tool grants"),
-  CommandSpec(kind: slResume, name: "/resume", usage: "/resume [ID]",
+  CommandSpec(kind: slResume, name: "/resume", usage: "/resume [query|ID]",
     description: "list this project's sessions, or resume one"),
   CommandSpec(kind: slFork, name: "/fork", usage: "/fork [message]",
     description: "fork from a user message and continue in a new session"),
@@ -169,7 +170,9 @@ proc helpText*(): string =
     ("Alt+Up", "restore queued messages to the composer"),
     ("Ctrl-V", "paste text or an image file path"),
     ("Tab / Up / Down", "accept / move through suggestions"),
-    ("Left/Right, or Ctrl-B/F", "move the cursor by character"),
+    ("Ctrl-R / Ctrl-D in /resume", "rename / move the selected session to trash"),
+    ("Left/Right, or Ctrl-B", "move the cursor by character"),
+    ("Ctrl-F", "search the transcript"),
     ("Alt-B / Alt-F", "move the cursor by word"),
     ("Home/End, Ctrl-A/E", "jump to start / end of the line"),
     ("Up/Down, Ctrl-P/N", "history (and composer line up/down)"),
@@ -232,7 +235,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   let matched = specNamed(command)
   if parts.len == 1 and trailingSpace and matched.found and
      matched.spec.kind in {slModelsRefresh, slThinking, slWeb, slResume, slModel,
-                           slProvider, slName, slTheme, slFork}:
+                           slProvider, slName, slTheme, slFork, slSession}:
     return
 
   proc fail(msg: string): SlashCommand =
@@ -257,10 +260,23 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   of slDoctor:
     if parts.len > 2 or (parts.len == 2 and parts[1] != "test"):
       return fail("Usage: /doctor [test]")
-  of slHelp, slPlan, slAct, slStats, slSession, slNew, slCopy, slSettings,
+  of slHelp, slPlan, slAct, slStats, slNew, slCopy, slSettings,
      slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
+  of slSession:
+    if parts.len == 1:
+      discard
+    elif parts[1].toLowerAscii == "rename":
+      if parts.len < 4 or not validSessionId(parts[2]):
+        return fail("Usage: /session rename ID TITLE")
+      result.arg = "rename " & parts[2] & " " & parts[3 .. ^1].join(" ")
+    elif parts[1].toLowerAscii in ["delete", "restore"]:
+      if parts.len != 3 or not validSessionId(parts[2]):
+        return fail("Usage: /session " & parts[1].toLowerAscii & " ID")
+      result.arg = parts[1].toLowerAscii & " " & parts[2]
+    else:
+      return fail("Usage: " & matched.spec.usage)
   of slProvider:
     if parts.len > 2:
       return fail("Usage: " & matched.spec.usage)
@@ -542,13 +558,37 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
         if incomplete:
           return @["/web on", "/web off"]
       of slResume:
-        let prefix = if parts.len >= 2: parts[1] else: ""
-        if sessionDir.len > 0 and (parts.len <= 1 or incomplete or prefix.len > 0):
-          for info in listSessionsCached(sessionDir, workspace):
-            if prefix.len == 0 or info.id.startsWith(prefix):
-              result.add "/resume " & info.id
+        let query = restAfterCommand(input, matched.spec.name)
+        if sessionDir.len > 0 and (parts.len <= 1 or incomplete or query.len > 0):
+          let sessions = if query.len == 0:
+            listSessionsCached(sessionDir, workspace)
+          else:
+            searchSessions(sessionDir, workspace, query)
+          for info in sessions:
+            result.add "/resume " & info.id
           if result.len > 0:
             return
+        if incomplete: return @[matched.spec.usage]
+      of slSession:
+        let tokens = restAfterCommand(input, matched.spec.name).splitWhitespace
+        if tokens.len == 0:
+          return @["/session", "/session rename [ID] TITLE",
+            "/session delete [ID]", "/session restore [ID]"]
+        if tokens.len == 1:
+          for action in ["rename", "delete", "restore"]:
+            if action.startsWith(tokens[0].toLowerAscii):
+              result.add "/session " & action
+          if result.len > 0: return
+        if tokens.len == 2 and tokens[0].toLowerAscii in ["rename", "delete"]:
+          for info in listSessionsCached(sessionDir, workspace, limit = 0):
+            if info.sessionMatches(tokens[1]):
+              result.add "/session " & tokens[0].toLowerAscii & " " & info.id
+          if result.len > 0: return
+        if tokens.len == 2 and tokens[0].toLowerAscii == "restore":
+          for id in listTrashedSessionIds(sessionDir):
+            if id.toLowerAscii.contains(tokens[1].toLowerAscii):
+              result.add "/session restore " & id
+          if result.len > 0: return
         if incomplete: return @[matched.spec.usage]
       of slFork:
         let prefix = if parts.len >= 2: parts[1] else: ""
@@ -615,7 +655,7 @@ proc commandSuggestionDescription*(suggestion: string,
   const forkPrefix = "/fork "
   if sessionDir.len > 0 and suggestion.startsWith(resumePrefix):
     let id = suggestion[resumePrefix.len .. ^1].strip
-    for info in listSessionsCached(sessionDir, workspace):
+    for info in listSessionsCached(sessionDir, workspace, limit = 0):
       if info.id == id: return sessionLabel(info)
   if suggestion.startsWith(forkPrefix):
     let token = suggestion[forkPrefix.len .. ^1].strip

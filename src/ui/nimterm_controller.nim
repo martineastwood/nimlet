@@ -356,6 +356,12 @@ proc finishTurn(controller: NimletController, keepRunning, succeeded: bool) =
 
 proc handleEvent*(controller: NimletController,
                   event: UiEvent): EventResponse =
+  if event.kind == uiKey and event.key == keyCtrlF and
+      controller.screen.questionWidget.isNil and
+      not controller.screen.searching:
+    controller.screen.beginSearch()
+    controller.app[].focus(controller.screen)
+    return eventHandled
   if event.kind == uiTimer and event.timerId == "extensions":
     controller.processExtensionUpdates()
     return eventHandled

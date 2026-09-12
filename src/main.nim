@@ -20,6 +20,7 @@ type
     resumeLatest*: bool
     yolo*: bool
     trustOverride*: TrustOverride
+    fullscreen*: bool
     sessionId*: string
     ## Stay in the REPL after a CLI prompt (default: one-shot when prompt set).
     interactive*: bool
@@ -36,6 +37,7 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
   var promptParts: seq[string]
   var sawPrompt = false
   var endFlags = false
+  result.fullscreen = true
   while i < args.len:
     let a = args[i]
     if endFlags or sawPrompt:
@@ -116,6 +118,10 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
       result.resumeLatest = true
     of "--yolo":
       result.yolo = true
+    of "--fullscreen":
+      result.fullscreen = true
+    of "--no-fullscreen", "--regular":
+      result.fullscreen = false
     of "--approve":
       if result.trustOverride == trustDeny:
         result.error = "--approve cannot be combined with --no-approve"
@@ -311,6 +317,8 @@ proc runMain*() =
     echo "  --session ID     resume a session at startup"
     echo "  --resume         resume the latest session, if any"
     echo "  --yolo           auto-approve tools for this process"
+    echo "  --fullscreen     use the terminal alternate screen (default)"
+    echo "  --no-fullscreen  keep the normal terminal scrollback"
     echo "  --approve        load project-local resources for this process"
     echo "  --no-approve     skip project-local resources for this process"
     echo "  --interactive,-i keep the REPL after a CLI prompt"
@@ -395,7 +403,7 @@ proc runMain*() =
     return
 
   if stdout.isatty:
-    runNimtermTUI(agent, catalogNote, prompt)
+    runNimtermTUI(agent, catalogNote, prompt, cli.fullscreen)
   else:
     runConsole(agent, catalogNote, prompt)
 

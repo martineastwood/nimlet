@@ -73,6 +73,7 @@ type
 
 const
   sessionListLimit* = 20  ## picker / tab-complete; explicit /resume ID is uncapped
+  sessionTrashName = ".trash"
 
 var sessionListCaches: seq[SessionListCache]
 
@@ -635,6 +636,82 @@ proc listSessionsCached*(sessionDir: string, workspace = "",
   result = listSessions(sessionDir, workspace, limit)
   sessionListCaches.add SessionListCache(sessionDir: sessionDir,
     workspace: workspace, limit: limit, sessions: result)
+
+proc sessionMatches*(info: SessionInfo, query: string): bool =
+  let haystack = (info.id & " " & info.name & " " & info.preview).toLowerAscii
+  for token in query.strip.toLowerAscii.splitWhitespace:
+    if token.len > 0 and token notin haystack:
+      return false
+  true
+
+proc searchSessions*(sessionDir, workspace, query: string,
+                     limit = sessionListLimit): seq[SessionInfo] =
+  ## Search all matching sessions so an older match is not hidden by the picker cap.
+  let matches = listSessions(sessionDir, workspace, limit = 0)
+  for info in matches:
+    if not info.sessionMatches(query): continue
+    result.add info
+    if limit > 0 and result.len >= limit: break
+
+proc sessionTrashDir(sessionDir: string): string =
+  sessionDir / sessionTrashName
+
+proc trashedSessionId(path: string): string =
+  let name = path.extractFilename
+  if not name.endsWith(".jsonl"): return
+  let dot = name.find('.')
+  if dot <= 0: return
+  let id = name[0 ..< dot]
+  if validSessionId(id): result = id
+
+proc trashedSessionFiles(sessionDir: string, id = ""):
+    seq[tuple[mtime: Time, path: string]] =
+  let dir = sessionTrashDir(sessionDir)
+  if not dirExists(dir): return
+  for kind, path in walkDir(dir):
+    if kind != pcFile: continue
+    let found = trashedSessionId(path)
+    if found.len == 0 or (id.len > 0 and found != id): continue
+    result.add (getLastModificationTime(path), path)
+  result.sort do (a, b: tuple[mtime: Time, path: string]) -> int:
+    cmp(b.mtime, a.mtime)
+
+proc listTrashedSessionIds*(sessionDir: string): seq[string] =
+  for entry in trashedSessionFiles(sessionDir):
+    let id = trashedSessionId(entry.path)
+    if id.len > 0 and id notin result:
+      result.add id
+
+proc trashSession*(sessionDir, id: string): tuple[ok: bool, error: string] =
+  if not validSessionId(id):
+    return (false, "Invalid session ID.")
+  let path = sessionDir / (id & ".jsonl")
+  if not fileExists(path):
+    return (false, "Session not found: " & id)
+  let dir = sessionTrashDir(sessionDir)
+  try:
+    createDir(dir)
+    moveFile(path, dir / (id & "." & $int(epochTime() * 1_000_000) & ".jsonl"))
+    clearSessionListCache()
+    (true, "")
+  except CatchableError as e:
+    (false, e.msg)
+
+proc restoreSession*(sessionDir, id: string): tuple[ok: bool, error: string] =
+  if not validSessionId(id):
+    return (false, "Invalid session ID.")
+  let path = sessionDir / (id & ".jsonl")
+  if fileExists(path):
+    return (false, "Session already exists: " & id)
+  let candidates = trashedSessionFiles(sessionDir, id)
+  if candidates.len == 0:
+    return (false, "Deleted session not found: " & id)
+  try:
+    moveFile(candidates[0].path, path)
+    clearSessionListCache()
+    (true, "")
+  except CatchableError as e:
+    (false, e.msg)
 
 proc sessionLabel*(info: SessionInfo, now = getTime()): string =
   let title = if info.name.len > 0: info.name else: info.preview

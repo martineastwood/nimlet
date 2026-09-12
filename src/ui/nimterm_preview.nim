@@ -15,14 +15,15 @@ proc displayPath*(path: string): string =
   elif path.startsWith(home & DirSep): "~" & path[home.len .. ^1]
   else: path
 
-proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
+proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "",
+                    fullscreen = true) =
   var body = "Session: " & agent.session.id & "\nWorkspace: " &
     displayPath(agent.config.workspace)
   if catalogNote.len > 0: body.add "\n" & catalogNote
   let screen = newNimtermScreen(body, agent.config.workspace,
     agent.config.sessionDir, modelPickerFrom(agent), agent.session.id,
     agent.config.keybindings)
-  let backend = newPosixBackend()
+  let backend = newPosixBackend(fullscreen = fullscreen)
   var app = newApp(backend, screen)
   ## Keep streamed output bounded to a smooth 60 FPS while keyboard events
   ## bypass this budget in App.step.

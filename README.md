@@ -176,9 +176,14 @@ grants and `/permissions clear` to remove project grants.
 Use `/yolo` or start with `--yolo` to auto-approve all tools for the current
 process; `/yolo off` disables it. YOLO mode is never persisted.
 Use `/session` to print the current session ID and `/resume` to list or
-resume sessions. `/resume` lists this workspace (newest 20), with recency
-and the first user message; `/resume ID` restores that transcript and
+resume sessions. Bare `/resume` opens the session picker; type words from a
+session ID, name, or first message to filter it. `/resume` lists this workspace
+(newest 20), with recency and the first user message; `/resume ID` restores that transcript and
 the last provider and requested model used, without changing your saved defaults.
+In the picker, `Ctrl-R` prepares a rename and `Ctrl-D` prepares a recoverable
+delete; press `Enter` to run the prepared command. Rename, delete, and restore
+sessions directly with `/session rename ID TITLE`, `/session delete ID`, and
+`/session restore ID`. Deleted sessions are moved into Nimlet's session trash.
 Use `/copy` to copy the latest assistant response to the clipboard.
 Older sessions without provider metadata retain the currently selected provider.
 A session from another project still loads by ID,
@@ -220,7 +225,8 @@ preserved beside the session as `<session>.jsonl.recovery-<timestamp>`.
 - `Alt+Up` — restore queued messages to the composer
 - `Ctrl-V` — paste text or a clipboard image
 - `Tab` / `Up` / `Down` — accept / move through suggestions
-- `Left`/`Right`, `Ctrl-B`/`Ctrl-F` — move the cursor by character
+- `Left`/`Right`, `Ctrl-B` — move the cursor by character
+- `Ctrl-F` — search the transcript
 - `Alt-B` / `Alt-F` — move the cursor by word
 - `Home`/`End`, `Ctrl-A`/`Ctrl-E` — jump to start / end of the line
 - `Up`/`Down`, `Ctrl-P`/`Ctrl-N` — history (and composer line up/down)

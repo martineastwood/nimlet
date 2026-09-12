@@ -273,6 +273,43 @@ suite "black-box terminal integration":
     check canvas.lineText(0).endsWith("┊")
     check canvas.lineText(3).endsWith("┃")
 
+  test "transcript search finds, cycles, and highlights matches":
+    let transcript = newTranscriptWidget()
+    transcript.appendStatus("first needle")
+    transcript.appendStatus("no match")
+    transcript.appendStatus("second needle")
+    transcript.searchStyle = Style(foreground: ansi16(1))
+    var canvas = newCanvas(size(30, 6))
+    render(transcript, canvas, rect(0, 0, 30, 6))
+    check transcript.setSearch("NEEDLE") == 2
+    check transcript.searchIndex == 0
+    check transcript.nextSearch()
+    check transcript.searchIndex == 1
+    check transcript.nextSearch(backwards = true)
+    check transcript.searchIndex == 0
+    render(transcript, canvas, rect(0, 0, 30, 6))
+    check canvas.getCell(8, 0).style == transcript.searchStyle
+    transcript.clearSearch()
+    check transcript.searchMatches.len == 0
+
+  test "resume picker filters sessions and prepares rename or delete":
+    let root = freshDir()
+    defer: removeDir(root)
+    var named = initSession(root / "named.jsonl", "named")
+    named.workspace = root
+    named.addUserMessage("repair the parser")
+    named.setName("Parser cleanup")
+    let screen = newNimtermScreen("test", root, root, ModelPicker())
+    screen.composer.setText("/resume parser")
+    screen.refreshMenu()
+    check screen.menu.items.mapIt(it.label) == @["/resume named"]
+    check screen.handle(UiEvent(kind: uiKey, key: keyCtrlR)).handled
+    check screen.composer.text == "/session rename named "
+    screen.composer.setText("/resume ")
+    screen.refreshMenu()
+    check screen.handle(UiEvent(kind: uiKey, key: keyCtrlD)).handled
+    check screen.composer.text == "/session delete named"
+
   test "enter submits after mouse focus moves through the transcript and composer":
     let root = freshDir()
     defer: removeDir(root)
@@ -980,6 +1017,27 @@ suite "session":
     check "#older" in line
     check "(current)" in line
     check peekSession(root, "older").preview == "fix the failing parser test"
+
+  test "session search reaches older matches and trash restores them":
+    let root = freshDir()
+    defer: removeDir(root)
+    for i in 0 ..< sessionListLimit + 2:
+      let id = "s" & $i
+      var sess = initSession(root / (id & ".jsonl"), id)
+      sess.addUserMessage(if i == 0: "needle in an older session"
+                          else: "ordinary session")
+      setLastModificationTime(root / (id & ".jsonl"), fromUnix(1_000 + i))
+    let matches = searchSessions(root, "", "needle")
+    check matches.mapIt(it.id) == @["s0"]
+    check sessionMatches(matches[0], "NEEDLE older")
+    let deleted = trashSession(root, "s0")
+    check deleted.ok
+    check not fileExists(root / "s0.jsonl")
+    check listTrashedSessionIds(root) == @["s0"]
+    let restored = restoreSession(root, "s0")
+    check restored.ok
+    check fileExists(root / "s0.jsonl")
+    check initSession(root / "s0.jsonl", "s0").events.len == 1
 
   test "session name round-trips and labels the picker":
     let root = freshDir()
@@ -1703,6 +1761,11 @@ suite "slash commands":
     check parseSlash("/thinking high").arg == "high"
     check parseSlash("/settings").kind == slSettings
     check commandError("/settings now") == "/settings takes no arguments"
+    check parseSlash("/session").kind == slSession
+    check parseSlash("/session rename abc123 Parser cleanup").arg ==
+      "rename abc123 Parser cleanup"
+    check parseSlash("/session delete abc123").arg == "delete abc123"
+    check parseSlash("/session restore abc123").arg == "restore abc123"
     check parseSlash("/models refresh").kind == slModelsRefresh
     check parseSlash("/model refresh").kind == slError
     check parseSlash("/model").kind == slModel
@@ -1953,11 +2016,12 @@ suite "slash commands":
     check "/resume abc123" in commandSuggestions("/resume", root, root)
     check "/resume abc123" in commandSuggestions("/resume ", root, root)
     check "/resume abc123" in commandSuggestions("/resume ab", root, root)
+    check "/resume abc123" in commandSuggestions("/resume parser", root, root)
     check commandSuggestions("/re", root, root).len > 0
     check "/resume abc123" notin commandSuggestions("/re", root, root)
     let desc = commandSuggestionDescription("/resume abc123", root, root)
     check "fix the parser" in desc
-    check "/resume [ID]" in commandSuggestions("/resume")
+    check "/resume [query|ID]" in commandSuggestions("/resume")
 
   test "fork suggestions list user messages with previews":
     let root = freshDir()
@@ -4104,6 +4168,12 @@ suite "cli prompt args":
     check rpc.error.len == 0
     check rpc.mode == "rpc"
     check parseCliArgs(["--mode", "unknown"]).error.len > 0
+
+  test "fullscreen mode is selectable at startup":
+    check parseCliArgs([]).fullscreen
+    check parseCliArgs(["--fullscreen"]).fullscreen
+    check not parseCliArgs(["--no-fullscreen"]).fullscreen
+    check not parseCliArgs(["--regular"]).fullscreen
 
   test "provider invocation flags are ephemeral and parse tool allowlists":
     let cli = parseCliArgs(["--provider", "anthropic", "--model", "claude-test",

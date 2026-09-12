@@ -684,16 +684,58 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
     else:
       ui.emit(mlPlain, agent.permissions.describe())
   of slSession:
-    ui.emit(mlPlain, "Session: " & agent.session.id)
-    if agent.session.name.len > 0:
-      ui.emit(mlPlain, "Name: " & agent.session.name)
-    ui.emit(mlPlain, "Events: " & $agent.session.events.len)
-    ui.emit(mlPlain, "File: " & agent.session.path)
-    if agent.session.workspace.len > 0:
-      ui.emit(mlPlain, "Workspace: " & agent.session.workspace)
-    let think = if agent.config.thinking.len == 0: "(default)"
-                else: agent.config.thinking
-    ui.emit(mlPlain, "Thinking: " & think)
+    let parts = cmd.arg.splitWhitespace
+    if parts.len > 0 and parts[0] == "rename":
+      let id = parts[1]
+      let idStart = cmd.arg.find(' ', cmd.arg.find(' ') + 1) + 1
+      let title = if idStart > 0: cmd.arg[idStart .. ^1].strip else: ""
+      let (ok, loaded, err) = tryLoadSession(agent.config.sessionDir, id)
+      if not ok:
+        ui.emit(mlError, err)
+      else:
+        var target = loaded
+        target.setName(title)
+        ui.emit(mlOk, "Renamed session " & id & " to " & target.name)
+        ui.onChange()
+    elif parts.len > 0 and parts[0] == "delete":
+      let id = parts[1]
+      if id == agent.session.id:
+        ui.emit(mlWarn, "The active session cannot be deleted.")
+      elif ui.question.isNil:
+        ui.emit(mlWarn, "Session deletion requires interactive confirmation.")
+      else:
+        let answer = await ui.question("Move session to trash?", @[
+          QuestionOption(label: "Delete " & id,
+            description: "move it to Nimlet's recoverable session trash"),
+          QuestionOption(label: "Cancel")])
+        if answer.cancelled or answer.selected != 0:
+          ui.emit(mlDim, "Session deletion cancelled.")
+        else:
+          let deleted = trashSession(agent.config.sessionDir, id)
+          if deleted.ok:
+            ui.emit(mlOk, "Moved session " & id &
+              " to trash. Restore with /session restore " & id)
+            ui.onChange()
+          else:
+            ui.emit(mlError, deleted.error)
+    elif parts.len > 0 and parts[0] == "restore":
+      let restored = restoreSession(agent.config.sessionDir, parts[1])
+      if restored.ok:
+        ui.emit(mlOk, "Restored session " & parts[1])
+        ui.onChange()
+      else:
+        ui.emit(mlError, restored.error)
+    else:
+      ui.emit(mlPlain, "Session: " & agent.session.id)
+      if agent.session.name.len > 0:
+        ui.emit(mlPlain, "Name: " & agent.session.name)
+      ui.emit(mlPlain, "Events: " & $agent.session.events.len)
+      ui.emit(mlPlain, "File: " & agent.session.path)
+      if agent.session.workspace.len > 0:
+        ui.emit(mlPlain, "Workspace: " & agent.session.workspace)
+      let think = if agent.config.thinking.len == 0: "(default)"
+                  else: agent.config.thinking
+      ui.emit(mlPlain, "Thinking: " & think)
   of slResume:
     if cmd.arg.len == 0:
       let sessions = listSessions(agent.config.sessionDir, agent.config.workspace)
