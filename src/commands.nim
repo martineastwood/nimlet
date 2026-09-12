@@ -560,10 +560,13 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
       of slResume:
         let query = restAfterCommand(input, matched.spec.name)
         if sessionDir.len > 0 and (parts.len <= 1 or incomplete or query.len > 0):
-          let sessions = if query.len == 0:
-            listSessionsCached(sessionDir, workspace)
+          var sessions: seq[SessionInfo]
+          if query.len == 0:
+            let allSessions = listSessionsCached(sessionDir, workspace, limit = 0)
+            for i in 0 ..< min(sessionListLimit, allSessions.len):
+              sessions.add allSessions[i]
           else:
-            searchSessions(sessionDir, workspace, query)
+            sessions = searchSessions(sessionDir, workspace, query)
           for info in sessions:
             result.add "/resume " & info.id
           if result.len > 0:

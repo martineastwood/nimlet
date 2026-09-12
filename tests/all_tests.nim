@@ -287,6 +287,8 @@ suite "black-box terminal integration":
     check transcript.searchIndex == 1
     check transcript.nextSearch(backwards = true)
     check transcript.searchIndex == 0
+    check transcript.setSearch("NEEDLE") == 2
+    check transcript.searchIndex == 0
     render(transcript, canvas, rect(0, 0, 30, 6))
     check canvas.getCell(8, 0).style == transcript.searchStyle
     transcript.clearSearch()

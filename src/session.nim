@@ -647,7 +647,7 @@ proc sessionMatches*(info: SessionInfo, query: string): bool =
 proc searchSessions*(sessionDir, workspace, query: string,
                      limit = sessionListLimit): seq[SessionInfo] =
   ## Search all matching sessions so an older match is not hidden by the picker cap.
-  let matches = listSessions(sessionDir, workspace, limit = 0)
+  let matches = listSessionsCached(sessionDir, workspace, limit = 0)
   for info in matches:
     if not info.sessionMatches(query): continue
     result.add info
