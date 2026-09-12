@@ -23,6 +23,7 @@ import nimterm/style
 import nimterm/theme
 import nimterm/events
 import nimterm/widgets/question
+import nimterm/widgets/input
 import nimterm/widgets/transcript
 import ../src/models_dev
 import ../src/compaction
@@ -38,6 +39,9 @@ import ../src/extension_runtime
 import ../src/hooks
 import ../src/main
 import ../src/rpc
+import ../src/editor
+import ../src/keybindings
+import ../src/shell
 
 proc freshDir(): string
 
@@ -2756,6 +2760,103 @@ suite "composer and cost":
     check agent.processInput("/stats", ui)
     check "Latest cost: $1.00" in output
     check "Session cost: $2.00" in output
+
+suite "editor and shell shortcuts":
+  test "composer supports word deletion, yank, and undo":
+    let input = newInput()
+    input.setText("one two")
+    check input.handle(UiEvent(kind: uiKey, key: keyCtrlW)).handled
+    check input.text == "one "
+    check input.yankText == "two"
+    discard input.handle(UiEvent(kind: uiKey, key: keyCtrlY))
+    check input.text == "one two"
+    discard input.handle(UiEvent(kind: uiKey, key: keyCtrlZ))
+    check input.text == "one "
+    input.setText("one two")
+    input.cursor = 0
+    discard input.handle(UiEvent(kind: uiKey, key: keyAltD))
+    check input.text == " two"
+    check input.yankText == "one"
+    discard input.handle(UiEvent(kind: uiKey, key: keyCtrlY))
+    check input.text == "one two"
+
+  test "alt-d decodes as a word deletion shortcut":
+    var decoder: InputDecoder
+    decoder.feed("\ed")
+    let event = decoder.nextEvent(100)
+    check event.key == keyAltD
+
+  test "keybindings load and remap editor actions":
+    let root = freshDir()
+    defer: removeDir(root)
+    let path = root / "config.json"
+    writeFile(path, $(%*{"keybindings": {
+      "app.editor.external": "ctrl+q",
+      "tui.editor.deleteWordBackward": ["ctrl+r"]
+    }}))
+    let config = loadConfig(root, path)
+    let screen = newNimtermScreen("test", root, root / "sessions",
+      ModelPicker(), keybindings = config.keybindings)
+    check parseKeySpec("ctrl+q") == keyCtrlQ
+    check screen.handle(UiEvent(kind: uiKey, key: keyCtrlQ)).action.kind ==
+      "editor"
+    check not screen.handle(UiEvent(kind: uiKey, key: keyCtrlG)).handled
+    screen.composer.setText("one two")
+    discard screen.handle(UiEvent(kind: uiKey, key: keyCtrlR))
+    check screen.composer.text == "one "
+
+  test "external editor returns the edited composer text":
+    let root = freshDir()
+    defer: removeDir(root)
+    let editor = root / "editor"
+    writeFile(editor, "#!/bin/sh\nprintf 'edited prompt' > \"$1\"\n")
+    inclFilePermissions(editor, {fpUserExec, fpGroupExec, fpOthersExec})
+    let hadVisual = existsEnv("VISUAL")
+    let oldVisual = getEnv("VISUAL")
+    putEnv("VISUAL", editor)
+    defer:
+      if hadVisual: putEnv("VISUAL", oldVisual)
+      else: delEnv("VISUAL")
+    let result = editTextExternally("draft")
+    check result.ok
+    check result.text == "edited prompt"
+
+  test "shell shortcuts distinguish visible and model-bound commands":
+    let visible = parseShellShortcut("!printf visible")
+    check visible.found
+    check visible.sendToModel
+    check visible.command == "printf visible"
+    let hidden = parseShellShortcut("!!printf hidden")
+    check hidden.found
+    check not hidden.sendToModel
+    check hidden.command == "printf hidden"
+    let root = freshDir()
+    defer: removeDir(root)
+    let ran = runShellCommand(root, "printf shell-output")
+    check ran.exitCode == 0
+    check ran.output == "shell-output"
+
+  test "TUI shell shortcuts route output according to their prefix":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    agent.provider = TestProvider(responses: @[
+      ProviderResponse(content: @[text("ack")], finishReason: frEndTurn)])
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    var app = termapp.newApp(nil, screen)
+    let controller = newNimletController(screen, addr app, addr agent)
+    controller.handleAction(app, UiAction(sourceId: "screen", kind: "submit",
+      value: "!printf model-output"))
+    for _ in 0 .. 50: discard app.step()
+    check agent.session.events.len >= 1
+    check "model-output" in agent.session.events[0].message.content[0].text
+    controller.handleAction(app, UiAction(sourceId: "screen", kind: "submit",
+      value: "!!printf hidden-output"))
+    check screen.transcript.transcript.items[^1].text == "hidden-output"
 
 suite "file mentions":
   test "mentionAt finds @path and ignores emails":

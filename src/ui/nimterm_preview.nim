@@ -20,7 +20,8 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
     displayPath(agent.config.workspace)
   if catalogNote.len > 0: body.add "\n" & catalogNote
   let screen = newNimtermScreen(body, agent.config.workspace,
-    agent.config.sessionDir, modelPickerFrom(agent), agent.session.id)
+    agent.config.sessionDir, modelPickerFrom(agent), agent.session.id,
+    agent.config.keybindings)
   let backend = newPosixBackend()
   var app = newApp(backend, screen)
   ## Keep streamed output bounded to a smooth 60 FPS while keyboard events

@@ -5,7 +5,9 @@ import nimgent
 import nimterm/[ansi, canvas, events, geometry, keys, style, theme, widget, widgets]
 import ../commands
 import ../config
+import ../editor
 import ../images
+import ../keybindings
 import ../session
 import ../workspace
 import diff
@@ -32,6 +34,7 @@ type
     footer*: string
     footerRight*: string
     extensionWidgetLines*: seq[string]
+    keybindings*: JsonNode
     headerSessionId: string
     headerSessionLine: int
     headerSessionColumn: int
@@ -99,7 +102,8 @@ proc rememberInput(screen: NimtermScreen) =
   writeFile(path, body)
 
 proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
-                       modelPicker: ModelPicker, sessionId = ""): NimtermScreen =
+                       modelPicker: ModelPicker, sessionId = "",
+                       keybindings: JsonNode = nil): NimtermScreen =
   let t = currentTheme
   let panelStyle = t.themedStyle(t.text, t.panelBg)
   let composerStyle = t.themedStyle(t.text)
@@ -118,6 +122,7 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
       cursorStyle = composerAccentStyle, cursorBarStyle = composerAccentStyle),
     workspace: workspace,
     sessionDir: sessionDir,
+    keybindings: if keybindings.isNil: newJObject() else: keybindings,
     modelPicker: modelPicker, headerSessionId: sessionId,
     headerSessionLine: -1, headerSessionColumn: -1,
     headerSelectionStart: -1, headerSelectionEnd: -1,
@@ -441,6 +446,15 @@ proc convertImagePathInput(screen: NimtermScreen): bool =
   screen.refreshMenu()
   true
 
+proc bound(screen: NimtermScreen, action: string, key: Key): bool =
+  bindingMatches(screen.keybindings, action, key)
+
+proc editorKey(screen: NimtermScreen, key: Key): Key =
+  keybindings.editorKey(screen.keybindings, key)
+
+proc editExternal*(screen: NimtermScreen): ExternalEditResult =
+  editTextExternally(screen.composer.text)
+
 method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
   if not screen.questionWidget.isNil:
     if event.kind == uiKey and event.key in {keyPageUp, keyPageDown}:
@@ -456,60 +470,78 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
     return screen.transcript.handle(event)
   if event.kind != uiKey:
     return eventIgnored
+  if screen.bound("app.editor.external", event.key):
+    return screen.actionHandled("editor")
   if screen.busy:
-    case event.key
-    of keyEscape, keyCtrlC:
+    if screen.bound("app.interrupt", event.key) or
+        screen.bound("app.clear", event.key):
       return screen.actionHandled("interrupt")
-    of keyAltUp:
+    if screen.bound("app.message.dequeue", event.key):
       return screen.actionHandled("dequeue")
-    of keyEnter:
+    if screen.bound("tui.input.submit", event.key):
       if screen.composer.text.strip.len > 0:
-        if screen.composer.text.strip.startsWith("/"):
-          screen.footer = screen.statusLine("slash commands cannot be queued")
+        let queued = screen.composer.text
+        if queued.strip.startsWith("/") or queued.strip.startsWith("!"):
+          screen.footer = screen.statusLine(
+            if queued.strip.startsWith("!"):
+              "shell shortcuts cannot be queued"
+            else: "slash commands cannot be queued")
         else:
-          let queued = screen.composer.text
           screen.rememberInput()
           screen.composer.clear()
           screen.refreshMenu()
           return screen.actionHandled("queue-steer", queued)
       return eventHandled
-    of keyAltEnter:
+    if screen.bound("app.message.followUp", event.key):
       if screen.composer.text.strip.len > 0:
-        if screen.composer.text.strip.startsWith("/"):
-          screen.footer = screen.statusLine("slash commands cannot be queued")
+        let queued = screen.composer.text
+        if queued.strip.startsWith("/") or queued.strip.startsWith("!"):
+          screen.footer = screen.statusLine(
+            if queued.strip.startsWith("!"):
+              "shell shortcuts cannot be queued"
+            else: "slash commands cannot be queued")
         else:
-          let queued = screen.composer.text
           screen.rememberInput()
           screen.composer.clear()
           screen.refreshMenu()
           return screen.actionHandled("queue-followup", queued)
       return eventHandled
-    of keyShiftTab:
+    if screen.bound("app.thinking.cycle", event.key):
       return screen.actionHandled("queue-mode-toggle")
-    else:
-      discard
-  if event.key == keyAltUp:
+  if screen.bound("app.message.dequeue", event.key):
     return screen.actionHandled("dequeue")
-  case event.key
-  of keyCopy:
-    return screen.transcript.copySelection()
-  of keyCtrlC:
+  let inputKey = screen.editorKey(event.key)
+  if screen.bound("app.clear", event.key):
     if screen.composer.text.len > 0:
       screen.composer.clear()
       screen.refreshMenu()
     else:
       return screen.actionHandled("quit")
+    return eventHandled
+  if screen.bound("app.interrupt", event.key):
+    screen.historyIndex = -1
+    screen.composer.clear()
+    screen.refreshMenu()
+    return eventHandled
+  if screen.bound("app.thinking.cycle", event.key):
+    return screen.actionHandled("toggle-mode")
+  case inputKey
+  of keyCopy:
+    return screen.transcript.copySelection()
   of keyEscape:
     screen.historyIndex = -1
     screen.composer.clear()
     screen.refreshMenu()
   of keyBackspace, keyDelete, keyChar, keyLeft, keyRight, keyHome, keyEnd,
-     keyCtrlA, keyCtrlE, keyCtrlU, keyAltB, keyAltF, keyShiftEnter:
+     keyCtrlA, keyCtrlE, keyCtrlK, keyCtrlU, keyCtrlW, keyCtrlY, keyCtrlZ,
+     keyAltB, keyAltD, keyAltF, keyShiftEnter:
     screen.historyIndex = -1
     if event.key == keyChar and screen.pasteImagePath(event.text):
       discard
     else:
-      discard screen.composer.handle(event)
+      var inputEvent = event
+      inputEvent.key = inputKey
+      discard screen.composer.handle(inputEvent)
       if event.key == keyChar:
         discard screen.convertImagePathInput()
     screen.refreshMenu()

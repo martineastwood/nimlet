@@ -89,6 +89,10 @@ Configuration example:
     "web_search": false,
     "steering_mode": "one-at-a-time",
     "follow_up_mode": "one-at-a-time"
+  },
+  "keybindings": {
+    "app.editor.external": "ctrl+g",
+    "tui.editor.undo": "ctrl+z"
   }
 }
 ```
@@ -96,6 +100,12 @@ Configuration example:
 `api_key` accepts `{env:NAME}`, `{file:path}`, or a literal key. Relative file
 paths resolve from the config file that defines them, and `~` is supported.
 Credential files may end with a newline.
+
+Interactive keybindings are configured as action IDs under the top-level
+`keybindings` object. Values are a single key string or an array; an empty
+array disables that action. For example, `tui.editor.undo` can be moved to
+`ctrl+u` and `app.editor.external` to `ctrl+e`. Supported action IDs cover the
+editor, queue, clear/interrupt, external editor, and mode toggle shortcuts.
 
 Provider blocks also accept an `options` object with native API request fields:
 
@@ -214,6 +224,11 @@ preserved beside the session as `<session>.jsonl.recovery-<timestamp>`.
 - `Alt-B` / `Alt-F` — move the cursor by word
 - `Home`/`End`, `Ctrl-A`/`Ctrl-E` — jump to start / end of the line
 - `Up`/`Down`, `Ctrl-P`/`Ctrl-N` — history (and composer line up/down)
+- `Ctrl-G` — open the composer in `$VISUAL`, `$EDITOR`, or `nano`
+- `Ctrl-Z` — undo the last composer edit
+- `Ctrl-W` / `Alt-D` — delete the previous / next word; `Ctrl-Y` yanks it back
+- `!command` — run a shell command and send its output to the model
+- `!!command` — run a shell command without sending its output to the model
 - `Ctrl-O` — show or hide tool output and thinking details
 - `PgUp` / `PgDn` / mouse wheel — scroll the transcript
 

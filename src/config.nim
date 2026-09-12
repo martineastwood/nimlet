@@ -40,6 +40,7 @@ type
     requestTimeout*: int
     maxToolOutputBytes*: int
     sessionDir*: string
+    keybindings*: JsonNode
     providers: JsonNode  ## merged `providers` object
 
 const
@@ -430,6 +431,7 @@ proc applyDoc(config: var AgentConfig, doc: JsonNode) =
     nimletConfigDir() / "sessions")
   config.maxToolOutputBytes = jint(jobj(jobj(doc, "tools"), "bash"),
     "max_output_bytes", 100_000)
+  config.keybindings = jobj(doc, "keybindings")
 
 proc ensureAgentObj(doc: var JsonNode) =
   if "agent" notin doc or doc["agent"].kind != JObject:

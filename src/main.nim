@@ -1,6 +1,7 @@
 import std/[asyncdispatch, json, os, sequtils, strutils, terminal]
 import nimgent
 import config, agent, session, hooks, events, rpc
+import shell
 import ui/[console, nimterm_preview, turn]
 import nimterm/theme
 
@@ -238,6 +239,22 @@ proc runConsole(agent: var Agent, catalogNote = "", initialPrompt = "") =
     printPrompt()
     try:
       let input = stdin.readLine()
+      let shortcut = parseShellShortcut(input)
+      if shortcut.found:
+        let shell = runShellCommand(agent.config.workspace, shortcut.command)
+        var output = shell.output
+        if shell.error.len > 0:
+          if output.len > 0: output.add "\n"
+          output.add shell.error
+        if shortcut.sendToModel:
+          var prompt = "$ " & shortcut.command & "\n"
+          if output.len > 0: prompt.add "\n" & output
+          prompt.add "\n\n(exit " & $shell.exitCode & ")"
+          if not agent.processInput(prompt, ui): break
+        else:
+          echo "$ " & shortcut.command
+          echo if output.len == 0: "(no output)" else: output
+        continue
       if not agent.processInput(input, ui):
         break
     except IOError:

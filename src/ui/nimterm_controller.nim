@@ -2,7 +2,7 @@
 
 import std/[asyncdispatch, posix, strutils, times]
 import nimgent
-import nimterm/[app, events, keys, transcript, widget, widgets]
+import nimterm/[app, backend, events, keys, transcript, widget, widgets]
 import nimterm/term
 import ../agent
 import ../extension_runtime
@@ -11,6 +11,7 @@ import ../session
 import ../permissions
 import nimterm_adapter
 import nimterm_screen
+import ../shell
 import tool_summary
 import turn
 
@@ -114,6 +115,16 @@ proc requestInterrupt(controller: NimletController) =
   controller.signalCancel()
   controller.screen.activity = "Stopping…"
   controller.refreshFooter()
+
+proc cancelInteraction(controller: NimletController) =
+  controller.requestInterrupt()
+  if not controller.questionFuture.isNil and
+      not controller.questionFuture.finished:
+    controller.questionFuture.complete QuestionAnswer(selected: -1,
+      cancelled: true)
+  if not controller.approvalFuture.isNil and
+      not controller.approvalFuture.finished:
+    controller.approvalFuture.complete(pdDeny)
 
 proc previewSink(controller: NimletController): TurnSink =
   let screen = controller.screen
@@ -306,6 +317,30 @@ proc startSubmission*(controller: NimletController, text: string) =
   controller.turns.active = processInputAsync(controller.agent, text,
     controller.ui)
 
+proc runShellShortcut(controller: NimletController, text: string): bool =
+  let shortcut = parseShellShortcut(text)
+  if not shortcut.found: return false
+  let shell = runShellCommand(controller.agent[].config.workspace,
+    shortcut.command)
+  var output = shell.output
+  if shell.error.len > 0:
+    if output.len > 0: output.add "\n"
+    output.add shell.error
+  if shortcut.sendToModel:
+    var prompt = "$ " & shortcut.command & "\n"
+    if output.len > 0: prompt.add "\n" & output
+    prompt.add "\n\n(exit " & $shell.exitCode & ")"
+    controller.startSubmission(prompt)
+  else:
+    controller.screen.transcript.appendStatus("$ " & shortcut.command)
+    controller.screen.transcript.appendStatus(
+      if output.len == 0: "(no output)"
+      else: output.strip(leading = false, chars = {'\n', '\r'}))
+    controller.screen.footer = controller.screen.statusLine(
+      "shell exited " & $shell.exitCode)
+    controller.refreshFooter()
+  true
+
 proc finishTurn(controller: NimletController, keepRunning, succeeded: bool) =
   if not keepRunning:
     controller.quitRequested = true
@@ -333,14 +368,7 @@ proc handleEvent*(controller: NimletController,
   if event.kind == uiResize:
     controller.refreshFooter(max(0, event.width))
   if controller.screen.busy and event.kind == uiKey and event.key == keyCtrlC:
-    controller.requestInterrupt()
-    if not controller.questionFuture.isNil and
-        not controller.questionFuture.finished:
-      controller.questionFuture.complete QuestionAnswer(selected: -1,
-        cancelled: true)
-    if not controller.approvalFuture.isNil and
-        not controller.approvalFuture.finished:
-      controller.approvalFuture.complete(pdDeny)
+    controller.cancelInteraction()
     return eventHandled
   eventIgnored
 
@@ -371,6 +399,18 @@ proc handleAction*(controller: NimletController, running: var App,
         text: action.value, cancelled: action.cancelled)
   of "screen":
     case action.kind
+    of "editor":
+      let edited = screen.editExternal()
+      if edited.ok:
+        screen.historyIndex = -1
+        screen.composer.setText(edited.text)
+        screen.refreshMenu()
+        screen.notice = "External editor applied"
+        screen.noticeUntil = epochTime() + 2.0
+      elif edited.error.len > 0:
+        screen.footer = screen.statusLine("editor: " & edited.error)
+      if not running.backend.isNil: running.backend.resetPresentation()
+      running.invalidate()
     of "copy":
       copyToClipboard(action.value)
       screen.notice = "Copied session ID"
@@ -389,8 +429,10 @@ proc handleAction*(controller: NimletController, running: var App,
     of "dequeue": controller.restoreQueuedMessages()
     of "queue-mode-toggle":
       controller.modeSwitchPending = not controller.modeSwitchPending
-    of "interrupt": controller.requestInterrupt()
-    of "submit": controller.startSubmission(action.value)
+    of "interrupt": controller.cancelInteraction()
+    of "submit":
+      if not controller.runShellShortcut(action.value):
+        controller.startSubmission(action.value)
     else: discard
   else: discard
   running.invalidate()
