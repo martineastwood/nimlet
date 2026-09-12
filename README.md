@@ -12,6 +12,44 @@ nimble idleSmoke   # ~60s at prompt; near-zero CPU (see scripts/idle_smoke.sh)
 
 Set `NIMTERM_PERF=1` when debugging frame and event-to-render latency.
 
+## Linux runtime dependencies
+
+Release binaries include the Nim and Nimble package code, but HTTPS and regular
+expression support use the system OpenSSL and PCRE libraries. Debian/Ubuntu
+users should install the runtime dependencies:
+
+```sh
+sudo apt update
+sudo apt install ca-certificates libpcre3 openssl
+```
+
+The `openssl` package pulls in the matching OpenSSL runtime for the
+distribution (`libssl3` on some releases and `libssl3t64` on newer Ubuntu).
+
+Nim supports static linking when static C libraries are available, but nimlet
+currently uses Nim's default dynamically loaded OpenSSL and PCRE wrappers.
+
+## Windows and macOS runtime dependencies
+
+For distributed binaries, include the matching OpenSSL and PCRE shared
+libraries in the release archive or application bundle. Windows users should
+place the required `.dll` files beside `nimlet.exe`; macOS users should receive
+the required `.dylib` files in the bundle. Users do not need Nim or Nimble.
+
+The PCRE library name depends on the Nim version used to build the binary: Nim
+2.0 uses PCRE1, while current Nim releases use PCRE2. Build and package the
+binary and native libraries with the same Nim release.
+
+For local macOS builds using current Nim, Homebrew provides the libraries:
+
+```sh
+brew install openssl@3 pcre2
+DYLD_LIBRARY_PATH="$(brew --prefix openssl@3)/lib:$(brew --prefix pcre2)/lib" ./nimlet
+```
+
+For a real release, bundle these libraries and configure the application
+loader path instead of requiring `DYLD_LIBRARY_PATH`.
+
 nimlet depends on the sibling [nimgent](../nimgent) package (LLM client
 library) and [nimterm](../nimterm) (terminal UI primitives). Local development
 resolves both via `nim.cfg`; with Docker Compose, `../nimgent` is mounted at
