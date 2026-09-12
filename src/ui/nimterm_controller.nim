@@ -11,6 +11,7 @@ import ../session
 import ../permissions
 import nimterm_adapter
 import nimterm_screen
+import tool_summary
 import turn
 
 type
@@ -136,7 +137,14 @@ proc previewSink(controller: NimletController): TurnSink =
     hasPendingDelta = false
     lastDeltaFlush = epochTime()
   proc send(event: NimletEvent) =
-    let uiEvent = event.toAgentUiEvent
+    # Errors are rendered by TurnSink.emit so lifecycle errors remain available
+    # to JSON/RPC consumers without duplicating them in the terminal transcript.
+    if event.kind == neError: return
+    var displayEvent = event
+    if event.kind == neToolResult:
+      displayEvent.toolOutput = transcriptToolOutput(event.toolName,
+        event.toolInput, event.toolOutput, event.isError)
+    let uiEvent = displayEvent.toAgentUiEvent
     if uiEvent.kind == ueRunStarted: runId = uiEvent.runId
     if uiEvent.kind in {ueRunStarted, ueStepStarted}:
       thinkingRefreshShown = false

@@ -20,6 +20,7 @@ type
   RegisteredTool* = object
     definition*: ToolDefinition
     extension*: int
+    capabilities*: ToolCapabilities
 
   StatusEntry* = object
     key*: string
@@ -237,8 +238,13 @@ proc startExtensions*(workspace, sessionId: string): ExtensionRuntime =
           if name.len == 0 or description.len == 0 or schema.kind != JObject:
             raise newException(ValueError,
               "registered tools require name, description, and input_schema")
+          let capabilities = parseCapabilities(tool.getOrDefault("capabilities"))
+          if not capabilities.ok:
+            raise newException(ValueError,
+              "invalid capabilities for tool '" & name & "': " & capabilities.err)
           result.tools.add RegisteredTool(definition: ToolDefinition(name: name,
-            description: description, inputSchema: schema), extension: processIndex)
+            description: description, inputSchema: schema), extension: processIndex,
+            capabilities: capabilities.capabilities)
       createThread(result.processes[processIndex].reader, readMessages,
         ReaderArgs(runtime: result, extension: processIndex))
     except CatchableError as e:
@@ -329,7 +335,8 @@ proc invoke*(runtime: ExtensionRuntime, name,
     return
   raise newException(ValueError, "unknown extension command: " & name)
 
-proc registerTools*(runtime: ExtensionRuntime, registry: var ToolRegistry) =
+proc registerTools*(runtime: ExtensionRuntime, registry: var ToolRegistry,
+                    plan: ptr ToolRegistry = nil) =
   if runtime.isNil: return
   for tool in runtime.tools:
     if isBuiltinName(tool.definition.name):
@@ -345,7 +352,9 @@ proc registerTools*(runtime: ExtensionRuntime, registry: var ToolRegistry) =
           "arguments": input})
       return ToolResult(output: response.getOrDefault("content").getStr,
         isError: response.getOrDefault("is_error").getBool)
-    registry.register(registered.definition, run)
+    registry.register(registered.definition, run, registered.capabilities)
+    if not plan.isNil and registered.capabilities.planSafe:
+      plan[].register(registered.definition, run, registered.capabilities)
 
 proc takeNotices*(runtime: ExtensionRuntime): seq[ExtensionNotice] =
   if runtime.isNil: return

@@ -13,8 +13,8 @@ import tools/tool
 
 const
   DefaultTimeout* = 30
-  BuiltinToolNames* = ["ask_user", "bash", "edit", "glob", "grep", "read",
-    "read_skill", "write"]
+  BuiltinToolNames* = ["ask_user", "bash", "edit", "git", "glob", "grep",
+    "read", "read_skill", "write"]
 
 type
   ExtensionTool* = object
@@ -24,6 +24,7 @@ type
     timeoutSeconds*: int
     inputSchema*: JsonNode
     dir*: string
+    capabilities*: ToolCapabilities
 
   DiscoverResult* = object
     tools*: seq[ExtensionTool]
@@ -78,6 +79,9 @@ proc parseManifest(path: string): tuple[ok: bool, tool: ExtensionTool, err: stri
   let timeout = parseTimeoutSeconds(doc)
   if not timeout.ok:
     return (false, ExtensionTool(), timeout.err)
+  let capabilities = parseCapabilities(doc.getOrDefault("capabilities"))
+  if not capabilities.ok:
+    return (false, ExtensionTool(), capabilities.err)
 
   result.ok = true
   result.tool = ExtensionTool(
@@ -86,7 +90,8 @@ proc parseManifest(path: string): tuple[ok: bool, tool: ExtensionTool, err: stri
     command: command.command,
     timeoutSeconds: timeout.timeout,
     inputSchema: doc["input_schema"],
-    dir: path.parentDir)
+    dir: path.parentDir,
+    capabilities: capabilities.capabilities)
 
 proc discoverExtensions*(workspace: string): DiscoverResult =
   ## Later roots override the same tool name: global → `.agent` → `.nimlet`.
@@ -214,7 +219,8 @@ proc makeExtensionTool*(ext: ExtensionTool, workspace: string,
   (def, run)
 
 proc registerExtensions*(reg: var ToolRegistry, workspace: string,
-                         maxOutputBytes = 100_000): seq[string] =
+                         maxOutputBytes = 100_000,
+                         plan: ptr ToolRegistry = nil): seq[string] =
   ## Discover and register external tools. Built-in names always win.
   ## Returns warnings (invalid manifests, builtin collisions).
   let discovered = discoverExtensions(workspace)
@@ -225,4 +231,6 @@ proc registerExtensions*(reg: var ToolRegistry, workspace: string,
         "': name collides with a built-in tool"
       continue
     let pair = makeExtensionTool(ext, workspace, maxOutputBytes)
-    reg.register(pair[0], pair[1])
+    reg.register(pair[0], pair[1], ext.capabilities)
+    if not plan.isNil and ext.capabilities.planSafe:
+      plan[].register(pair[0], pair[1], ext.capabilities)

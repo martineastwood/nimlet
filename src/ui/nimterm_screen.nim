@@ -1,6 +1,6 @@
 ## Nimlet terminal screen: widgets, input behavior, layout, and rendering.
 
-import std/[json, os, strutils, times]
+import std/[json, os, strutils, tables, times]
 import nimgent
 import nimterm/[ansi, canvas, events, geometry, keys, style, theme, widget, widgets]
 import ../commands
@@ -9,6 +9,7 @@ import ../images
 import ../session
 import ../workspace
 import diff
+import tool_summary
 
 type
   NimtermScreen* = ref object of Widget
@@ -109,7 +110,7 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
       t.themedStyle(t.accent), t.themedStyle(t.heading), descriptionStyle,
       selectedStyle),
     transcript: newTranscriptWidget(),
-    composer: newInput(style = composerStyle, prefixStyle = composerAccentStyle,
+    composer: newInput(style = composerStyle,
       cursorStyle = composerAccentStyle, cursorBarStyle = composerAccentStyle),
     workspace: workspace,
     sessionDir: sessionDir,
@@ -118,6 +119,8 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
     headerSelectionStart: -1, headerSelectionEnd: -1,
     headerSelectionStyle: selectedStyle, themeName: t.name,
     appliedThemeRevision: -1)
+  when compiles(result.composer.prefixStyle = composerAccentStyle):
+    result.composer.prefixStyle = composerAccentStyle
   if sessionId.len > 0:
     let prefix = "Session: "
     let marker = prefix & sessionId
@@ -170,6 +173,8 @@ proc updateHeaderSession*(screen: NimtermScreen, sessionId: string) =
 proc replaySession*(screen: NimtermScreen, session: Session) =
   if session.events.len == 0: return
   let runId = "replay:" & session.id
+  var toolNames = initTable[string, string]()
+  var toolInputs = initTable[string, JsonNode]()
   screen.transcript.apply AgentUiEvent(kind: ueRunStarted, runId: runId)
   var step = 0
   for event in session.events:
@@ -202,6 +207,8 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
           screen.transcript.apply AgentUiEvent(kind: ueThinkingDelta, runId: runId,
             step: step, text: part.thinking)
         of ckToolUse:
+          toolNames[part.id] = part.name
+          toolInputs[part.id] = part.input
           screen.transcript.apply AgentUiEvent(kind: ueToolCalled, runId: runId,
             step: step, toolId: part.id, toolName: part.name, toolInput: part.input)
         else:
@@ -210,8 +217,12 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
         step: step)
       inc step
     of sekToolResult:
+      let toolName = toolNames.getOrDefault(event.toolId)
+      let toolInput = toolInputs.getOrDefault(event.toolId)
       screen.transcript.apply AgentUiEvent(kind: ueToolResult, runId: runId,
-        step: step, toolId: event.toolId, toolOutput: event.toolOutput,
+        step: step, toolId: event.toolId,
+        toolOutput: transcriptToolOutput(toolName, toolInput,
+          event.toolOutput, event.toolError),
         isError: event.toolError)
     of sekCompaction:
       screen.transcript.appendStatus("Context compacted")

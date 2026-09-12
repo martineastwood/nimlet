@@ -15,6 +15,7 @@ import ../src/ui/turn
 import ../src/ui/nimterm_adapter
 import ../src/ui/nimterm_preview
 import ../src/ui/nimterm_screen
+import ../src/ui/tool_summary
 import nimterm/ansi
 import nimterm/input
 import nimterm/keys
@@ -149,7 +150,8 @@ proc freshDir(): string =
 proc invoke(pair: (ToolDefinition, ToolProc), input: JsonNode): ToolResult =
   waitFor pair[1](input)
 
-proc writeExt(root, folder, name, runBody: string, timeout = 30) =
+proc writeExt(root, folder, name, runBody: string, timeout = 30,
+              capabilities: seq[string] = @[]) =
   let dir = root / folder / "tools" / name
   createDir(dir)
   var manifest = %*{
@@ -160,6 +162,8 @@ proc writeExt(root, folder, name, runBody: string, timeout = 30) =
   }
   if timeout != 30:
     manifest["timeout_seconds"] = %timeout
+  if capabilities.len > 0:
+    manifest["capabilities"] = %capabilities
   writeFile(dir / "tool.json", $manifest)
   writeFile(dir / "run", "#!/bin/sh\n" & runBody & "\n")
   inclFilePermissions(dir / "run", {fpUserExec, fpGroupExec, fpOthersExec})
@@ -1276,8 +1280,9 @@ suite "agent turn persistence":
     let request = agent.buildRequest()
     var names: seq[string]
     for tool in request.tools: names.add tool.name
-    check names == @["read", "grep", "glob", "read_skill", "ask_user"]
+    check names == @["read", "grep", "glob", "git", "read_skill", "ask_user"]
     check "Current mode: PLAN" in request.system.join("\n")
+    check "one targeted search/read/history" in request.system.join("\n")
     var turns = 0
     ui.generate = proc (provider: Provider,
         request: ProviderRequest): Future[ProviderResponse] {.async.} =
@@ -2100,7 +2105,7 @@ suite "project instructions and skills":
     config.contextWindow = 128_000
     let request = initAgent(config).buildRequest()
     let system = request.system.join("\n")
-    check "expected_version" in system
+    check "version token" in system
     check "Do not commit" in system
     check "read_skill" in system
     check "Project instructions" notin system
@@ -2783,6 +2788,21 @@ suite "file mentions":
     writeFile(root / "b.txt", "b")
     check "b.txt" in listWorkspaceFiles(root)
 
+suite "transcript tool summaries":
+  test "hides read source while retaining search context":
+    let read = transcriptToolOutput("read", %*{"path": "src/main.nim"},
+      "path: src/main.nim\nversion: 10:20\nlines: 1-2 of 2\n\n1 | secret\n2 | source")
+    check "path: src/main.nim" in read
+    check "source lines hidden from transcript" in read
+    check "secret" notin read
+
+    let grep = transcriptToolOutput("grep", %*{
+      "pattern": "proc\\s+main", "glob": "**/*.nim"},
+      "src/main.nim:1:proc main\nsrc/other.nim:2:proc main")
+    check "pattern: proc\\s+main" in grep
+    check "glob: **/*.nim" in grep
+    check "src/main.nim:1:proc main" in grep
+
 suite "images":
   const png = "\x89PNG\r\n\x1a\n" & "fake-png"
   const jpeg = "\xFF\xD8\xFF\xE0" & "fake-jpeg"
@@ -3089,6 +3109,21 @@ suite "external tools":
     check "echo_ok" in names
     check "broken" notin names
 
+  test "only explicitly read-only external tools enter plan mode":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".nimlet", "safe", "cat >/dev/null\necho '{\"safe\":true}'",
+      capabilities = @["read"])
+    writeExt(root, ".nimlet", "unsafe", "cat >/dev/null\necho '{\"safe\":false}'")
+    var plan: ToolRegistry
+    var act: ToolRegistry
+    discard act.registerExtensions(root, plan = addr plan)
+    var planNames: seq[string]
+    for definition in plan.definitions:
+      planNames.add definition.name
+    check "safe" in planNames
+    check "unsafe" notin planNames
+
   test ".nimlet tools override .agent tools with the same name":
     let root = freshDir()
     defer: removeDir(root)
@@ -3226,7 +3261,7 @@ done
       "command": ["./extension.sh"], "response_timeout_seconds": nil}))
     writeFile(dir / "extension.sh", """#!/bin/sh
 read init
-echo '{"type":"register","commands":[],"tools":[{"name":"ext_echo","description":"Echo through the extension","input_schema":{"type":"object"}}]}'
+echo '{"type":"register","commands":[],"tools":[{"name":"ext_echo","description":"Echo through the extension","input_schema":{"type":"object"},"capabilities":["read"]}]}'
 read request
 echo '{"type":"response","id":"1","content":"extension tool result","is_error":false}'
 read shutdown
@@ -3237,6 +3272,12 @@ read shutdown
     config.sessionDir = root / "sessions"
     var agent = initAgent(config)
     defer: agent.stopExtensions()
+    agent.mode = modePlan
+    var visibleInPlan = false
+    for definition in agent.buildRequest().tools:
+      if definition.name == "ext_echo": visibleInPlan = true
+    check visibleInPlan
+    agent.mode = modeAct
     let output = waitFor agent.tools.execute("ext_echo", %*{})
     check not output.isError
     check output.output == "extension tool result"

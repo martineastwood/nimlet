@@ -173,17 +173,21 @@ workspace-filtered lists. `/model name` switches the model for later turns.
 `./nimlet --resume` continues the latest session for this workspace.
 A specific session can be selected with `./nimlet --session ID`.
 
-Use `/plan` for read-only investigation and planning, and `/act` to enable
-implementation. Shift+Tab toggles the same modes without changing your draft;
+Use `/plan` for an opt-in, read-only investigation checkpoint and `/act` to enable
+implementation. Plan mode exposes targeted file/search tools, local Git history,
+and extensions that explicitly declare read-only capabilities. Act mode reuses the
+latest plan and tool results instead of restarting broad exploration. Shift+Tab toggles
+the same modes without changing your draft;
 during a running turn it queues the switch for the next turn (press again to
 cancel the queued switch). The footer shows `[plan]` or `[act]`.
 
-Plan mode exposes only built-in `read`, `grep`, `glob`, and `read_skill` tools.
-Edits, shell execution, extension tools, hosted search, and hooks are disabled,
-and unadvertised tool calls are rejected at execution time. Session history
-still saves, and explicit configuration commands still work. Modes apply to
-the current process, including `/new` and `/resume`; restarting starts in act
-mode. Planning is optional and does not require a separate plan file.
+Plan mode exposes read-only file/search/history tools plus extensions explicitly
+marked with `read` or `user` capabilities. Edits, shell execution, hosted
+search, non-read-only extensions, and hooks are disabled, and unadvertised tool
+calls are rejected at execution time. Session history still saves, and explicit
+configuration commands still work. Modes apply to the current process, including
+`/new` and `/resume`; restarting starts in act mode. Planning is optional and
+does not require a separate plan file.
 
 On resume, missing local tool results are recorded as interrupted with an unknown
 execution outcome; completed results are preserved and tools are not automatically
@@ -238,6 +242,10 @@ rescanned on `/reload`, `/new`, and `/resume` (as well as process start).
 `/reload` keeps the current session; skills and `AGENTS.md` are already
 read from disk on every turn.
 
+External tools are act-only by default. Add `"capabilities":["read"]` (or
+`"user"`) to a manifest when the tool is safe to expose in plan mode; write,
+shell, and network capabilities keep it out of plan mode.
+
 Persistent extensions subscribe with an `events` array in their `register`
 response. Supported events are `tool_call`, `tool_result`, `session_start`,
 `session_end`, `session_before_compact`, `session_compact`, `turn_start`, and
@@ -261,7 +269,7 @@ Persistent extensions are language-neutral executables discovered from
 ```
 
 ```json
-{"type":"register","commands":[{"name":"hello","description":"Say hello"}],"events":["turn_start"]}
+{"type":"register","commands":[{"name":"hello","description":"Say hello"}],"events":["turn_start"],"tools":[{"name":"inspect","description":"Inspect project state","input_schema":{"type":"object"},"capabilities":["read"]}]}
 ```
 
 Invoking `/hello world` sends a `command` request with `name`, `arguments`, and
@@ -274,6 +282,9 @@ them; clean Nimlet exit sends `shutdown`.
 be `null` for no timeout. The same asynchronous request path is used for
 commands and tools, so long-running extensions keep the UI responsive.
 Responses are routed by ID, allowing concurrent requests.
+
+Persistent extension tools are act-only unless their registration includes
+capabilities containing only read and/or user.
 
 Any response may also carry host actions:
 

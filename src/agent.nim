@@ -10,7 +10,7 @@ import extensions, hooks
 import extension_runtime
 import nimgent
 import nimgent/providers/[anthropic, google, openai]
-import tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
+import tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool, git_tool]
 import tools/ask_user_tool
 import nimterm/widgets/question
 import nimterm/markdown
@@ -21,15 +21,9 @@ const baseSystemPrompt = """
 You are a coding agent working with the user in their workspace.
 Help them understand, diagnose, and change code according to their request.
 
-Tools:
-- read: file contents with line numbers and a version hash. Read a file before editing it.
-- grep: PCRE regex search (plain text still works). Optional glob and subdirectory path.
-- glob: list files matching a glob (e.g. **/*.nim).
-- edit: unique old_text → new_text. Use replacements=[{old_text,new_text},…] for several hunks in one call. Pass expected_version from that read.
-- write: create a file, or replace one only with overwrite=true. Prefer edit for existing files.
-- bash: run commands in the workspace (tests, git). Prefer grep/glob over bash for finding files.
-- read_skill: load a listed skill when it fits the task.
-- ask_user: ask the user a focused question with choices when an important decision is unclear.
+Tool availability is request-scoped. Call only tools listed for the current request;
+the tool list and schemas are authoritative. Read a file before editing it and use
+the returned version token for edits.
 
 Rules:
 - Stay in the workspace. Use relative paths. Do not invent file contents.
@@ -224,26 +218,29 @@ proc reloadToolsAndHooks*(agent: var Agent) =
   let bash = makeBashTool(ws.root, agent.config.maxToolOutputBytes)
   let skill = makeSkillTool(agent.config.workspace)
   let askUser = makeAskUserTool()
+  let git = makeGitTool(ws, agent.config.maxToolOutputBytes)
   var planTools: ToolRegistry
   planTools.register(read[0], read[1])
   planTools.register(grep[0], grep[1])
   planTools.register(glob[0], glob[1])
+  planTools.register(git[0], git[1])
   planTools.register(skill[0], skill[1])
   planTools.register(askUser[0], askUser[1])
-  agent.planTools = planTools
   reg.register(read[0], read[1])
   reg.register(grep[0], grep[1])
   reg.register(glob[0], glob[1])
   reg.register(edit[0], edit[1])
   reg.register(write[0], write[1])
   reg.register(bash[0], bash[1])
+  reg.register(git[0], git[1])
   reg.register(skill[0], skill[1])
   reg.register(askUser[0], askUser[1])
   agent.extensionWarnings = reg.registerExtensions(
-    agent.config.workspace, agent.config.maxToolOutputBytes)
+    agent.config.workspace, agent.config.maxToolOutputBytes, addr planTools)
   agent.extensionRuntime.stop()
   agent.extensionRuntime = startExtensions(agent.config.workspace, agent.session.id)
-  agent.extensionRuntime.registerTools(reg)
+  agent.extensionRuntime.registerTools(reg, addr planTools)
+  agent.planTools = planTools
   agent.tools = reg
   var commands: seq[ExtensionCommandInfo]
   for command in agent.extensionRuntime.commands:
@@ -302,6 +299,7 @@ proc rescanPlugins(agent: var Agent, ui: TurnSink) =
   reportLines(ui, mlWarn, agent.discoveryWarningLines)
 
 proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
+  result.mode = modeAct
   result.config = config
   result.attachProvider()
   result.session = loadSession(config.sessionDir, sessionId, config.workspace)
@@ -336,8 +334,12 @@ proc buildRequest*(agent: Agent): ProviderRequest =
   # runtime state and must be authoritative for this request.
   if agent.mode == modePlan:
     result.system.add """Current mode: PLAN. Investigate and discuss the requested work;
-do not implement changes. Only the built-in read, grep, glob, and read_skill tools
-are available. Shell commands, edits, extensions, and hooks are disabled.
+do not implement changes. The request's read-only tool list is authoritative: it may
+include read, grep, glob, git, read_skill, ask_user, and explicitly read-only
+extensions. Never call an absent tool, and never use edit, write, bash, hosted tools,
+or a non-read-only extension in PLAN. Start with one targeted search/read/history
+batch. Stop when the affected files, relevant unknowns, and likely verification are
+clear; do not inventory unrelated repository areas or reread unchanged files.
 Inspect the code before asking questions it can answer. Ask about consequential
 unknowns, then propose a concise scope, approach, and verification steps.
 For multi-step work, propose a short ordered plan. Skip checklists for simple requests.
@@ -348,6 +350,8 @@ within this conversation does not change the mode. Session history still saves."
 implementation mode for this request. Implement requested changes and verify them.
 Earlier conversation may contain a plan or a plan-mode refusal; that historical text
 does not restrict this ACT turn. Use the implementation tools when they are needed.
+Reuse the most recent plan and tool results in this session; do not repeat broad
+repository exploration unless new evidence or a changed assumption requires it.
 For multi-step work, follow the agreed plan when one exists; otherwise use a short
 ordered plan. Report meaningful progress and explain deviations as the work evolves.
 Skip checklists for simple requests."""
@@ -974,8 +978,8 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
       elif call.name == "ask_user":
         toolResult = await askUser(call.input, ui)
       elif agent.mode == modePlan:
-        # Separate registry prevents extensions overriding a read-only builtin.
-        if call.name notin ["read", "grep", "glob", "read_skill"]:
+        # The separate registry is the plan-mode capability boundary.
+        if not agent.planTools.contains(call.name):
           toolResult = toolFailure("tool_unavailable",
             "Tool unavailable in plan mode. The user must switch to /act to enable implementation tools.")
         else:
@@ -1024,7 +1028,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
       ui.toolResult(toolResult.output, toolResult.isError)
       ui.emitAgentEvent(NimletEvent(kind: neToolResult, runId: runId,
         sessionId: agent.session.id, turnId: runId, step: step,
-        toolId: call.id, toolName: call.name,
+        toolId: call.id, toolName: call.name, toolInput: call.input,
         toolOutput: toolResult.output, isError: toolResult.isError))
       ui.poll()
       if ui.wasInterrupted():
