@@ -40,7 +40,8 @@ one-at-a-time / all). The choice is persisted in the active config as
   `!!command` runs without sending output to the model.
 - The event-driven TUI and what "near-zero idle CPU" means in practice
   (`NIMTERM_PERF=1` for frame/latency diagnostics)
-- Composer editing: Enter, Shift+Enter, cursor movement, Home/End, history
+- Composer editing: Enter, Shift+Enter (or Alt+J), cursor movement, Home/End,
+  history
 - Keybindings can be overridden in the top-level `keybindings` object in
   `config.json`; values are key strings or arrays of key strings.
 - Transcript: scrolling (PgUp/PgDn, wheel), selecting and copying text,
@@ -50,4 +51,5 @@ one-at-a-time / all). The choice is persisted in the active config as
   `.nimlet/themes` and `~/.nimlet/themes`
 - Pasting text or clipboard images with Ctrl-V, and `@path` file/folder
   mentions in the composer
-- Full keyboard shortcut table
+- Full keyboard shortcut table on the
+  [Keyboard shortcuts](/reference/keybindings/) page

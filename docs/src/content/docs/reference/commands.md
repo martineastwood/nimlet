@@ -22,4 +22,5 @@ Generated from `CommandSpecs` / `helpText` so it cannot drift.
   fork suggestions
 - Skill (`/skill:<name>`) and prompt (`/name`) dispatch, and the ordering rules
   between built-ins, prompts, skills, and extension commands
-- Keyboard shortcut table for the interactive UI
+- Keyboard shortcuts live on the [Keyboard shortcuts](/reference/keybindings/)
+  page

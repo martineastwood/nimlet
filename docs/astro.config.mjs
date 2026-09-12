@@ -28,6 +28,7 @@ export default defineConfig({
 				{ label: 'Extensions and hooks', slug: 'guides/extensions-and-hooks' },
 				{ label: 'Built-in tools', slug: 'reference/tools' },
 				{ label: 'Commands and shortcuts', slug: 'reference/commands' },
+				{ label: 'Keyboard shortcuts', slug: 'reference/keybindings' },
 				{ label: 'JSON mode', slug: 'reference/json-mode' },
 				{ label: 'RPC mode', slug: 'reference/rpc-mode' },
 				{ label: 'Files and directories', slug: 'reference/files-and-directories' },

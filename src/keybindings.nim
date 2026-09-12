@@ -41,6 +41,7 @@ proc parseKeySpec*(value: string): Key =
       of "b", "left": keyAltB
       of "d": keyAltD
       of "f", "right": keyAltF
+      of "j": keyAltJ
       of "up": keyAltUp
       of "enter", "return": keyAltEnter
       else: keyNone
@@ -107,7 +108,7 @@ proc defaultKeySpecs(action: string): seq[string] =
   of "tui.editor.historyNext": @[
     "ctrl+n"]
   of "tui.input.newLine": @[
-    "shift+enter"]
+    "shift+enter", "alt+j"]
   of "tui.input.submit": @[
     "enter"]
   of "tui.input.tab": @[
@@ -167,12 +168,13 @@ proc editorKey*(keybindings: JsonNode, key: Key): Key =
     ("tui.editor.historyPrevious", keyCtrlP),
     ("tui.editor.historyNext", keyCtrlN),
     ("tui.input.newLine", keyShiftEnter),
+    ("tui.input.newLine", keyAltJ),
     ("tui.input.submit", keyEnter),
     ("tui.input.tab", keyTab),
   ]
   for (action, canonical) in actions:
     if bindingMatches(keybindings, action, key): return canonical
-    if configuredSpecs(keybindings, action).found and
-        key == parseKeySpec(defaultKeySpecs(action)[0]):
-      return keyNone
+    if configuredSpecs(keybindings, action).found:
+      for spec in defaultKeySpecs(action):
+        if parseKeySpec(spec) == key: return keyNone
   key

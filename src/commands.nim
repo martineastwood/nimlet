@@ -160,7 +160,7 @@ proc helpText*(): string =
     ("Shift+Tab", "switch plan / act mode (after the current turn if busy)"),
     ("Enter", "submit, or queue a steering message while a turn runs"),
     ("Alt+Enter", "queue a follow-up message while a turn runs"),
-    ("Shift+Enter", "newline in the composer"),
+    ("Shift+Enter / Alt+J", "newline in the composer"),
     ("Ctrl-G", "open the composer in $VISUAL or $EDITOR"),
     ("Ctrl-Z", "undo the last composer edit"),
     ("Ctrl-W / Alt-D", "delete the previous / next word"),

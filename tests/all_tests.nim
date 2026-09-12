@@ -2987,6 +2987,24 @@ suite "editor and shell shortcuts":
     discard screen.handle(UiEvent(kind: uiKey, key: keyCtrlR))
     check screen.composer.text == "one "
 
+  test "alt-j inserts a newline and can be remapped or disabled":
+    let root = freshDir()
+    defer: removeDir(root)
+    let defaultScreen = newNimtermScreen("test", root, root / "sessions",
+      ModelPicker())
+    discard defaultScreen.handle(UiEvent(kind: uiKey, key: keyAltJ))
+    check defaultScreen.composer.text == "\n"
+    let path = root / "config.json"
+    writeFile(path, $(%*{"keybindings": {
+      "tui.input.newLine": ["ctrl+o"]
+    }}))
+    let custom = newNimtermScreen("test", root, root / "sessions",
+      ModelPicker(), keybindings = loadConfig(root, path).keybindings)
+    # Remapping newLine turns the default shift+enter and alt+j keys off.
+    check not custom.handle(UiEvent(kind: uiKey, key: keyAltJ)).handled
+    check not custom.handle(UiEvent(kind: uiKey, key: keyShiftEnter)).handled
+    check custom.composer.text == ""
+
   test "external editor returns the edited composer text":
     let root = freshDir()
     defer: removeDir(root)

@@ -275,7 +275,7 @@ preserved beside the session as `<session>.jsonl.recovery-<timestamp>`.
 
 - `Enter` — submit; while a turn is running, queue a steering message
 - `Alt+Enter` — queue a follow-up message while a turn runs
-- `Shift+Enter` — newline in the composer
+- `Shift+Enter` / `Alt+J` — newline in the composer
 - `Shift+Tab` — toggle plan / act mode
 - `Esc` / `Ctrl-C` — interrupt a running turn and restore queued messages
 - `Alt+Up` — restore queued messages to the composer
