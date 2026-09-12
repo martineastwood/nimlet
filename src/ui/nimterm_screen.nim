@@ -279,9 +279,14 @@ proc refreshMenuTheme(screen: NimtermScreen) =
   screen.menu.borderStyle = t.themedStyle(t.accent)
   screen.menu.titleStyle = t.themedStyle(t.heading)
   screen.composer.style = t.themedStyle(t.text)
-  screen.composer.prefixStyle = t.themedStyle(t.accent, "", {attrBold})
-  screen.composer.cursorStyle = screen.composer.prefixStyle
-  screen.composer.cursorBarStyle = screen.composer.prefixStyle
+  let composerAccentStyle = t.themedStyle(t.accent, "", {attrBold})
+  when compiles(screen.composer.prefixStyle = composerAccentStyle):
+    screen.composer.prefixStyle = composerAccentStyle
+    screen.composer.cursorStyle = screen.composer.prefixStyle
+    screen.composer.cursorBarStyle = screen.composer.prefixStyle
+  else:
+    screen.composer.cursorStyle = composerAccentStyle
+    screen.composer.cursorBarStyle = composerAccentStyle
   screen.transcript.userStyle = t.themedStyle(t.muted)
   screen.transcript.assistantStyle = t.themedStyle(t.text)
   screen.transcript.thinkingStyle = t.themedStyle(t.muted, "",
