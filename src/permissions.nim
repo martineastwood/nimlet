@@ -2,6 +2,7 @@
 
 import std/[json, os, strutils, tables]
 import nimgent
+import trust
 
 type
   PermissionDecision* = enum
@@ -66,6 +67,7 @@ proc newPermissionPolicy*(workspace: string): PermissionPolicy =
     projectPath: projectPermissionPath(expandFilename(workspace)),
     sessionAllows: initTable[string, bool](),
     projectAllows: initTable[string, bool]())
+  if not projectResourcesTrusted(result.workspace): return
   if not fileExists(result.projectPath): return
   try:
     let doc = parseJson(readFile(result.projectPath))

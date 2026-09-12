@@ -1,6 +1,6 @@
 import std/[asyncdispatch, json, os, sequtils, strutils, terminal]
 import nimgent
-import config, agent, session, hooks, events, rpc
+import config, agent, session, hooks, events, rpc, trust
 import shell
 import ui/[console, nimterm_preview, turn]
 import nimterm/theme
@@ -19,6 +19,7 @@ type
     noSession*: bool
     resumeLatest*: bool
     yolo*: bool
+    trustOverride*: TrustOverride
     sessionId*: string
     ## Stay in the REPL after a CLI prompt (default: one-shot when prompt set).
     interactive*: bool
@@ -115,6 +116,16 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
       result.resumeLatest = true
     of "--yolo":
       result.yolo = true
+    of "--approve":
+      if result.trustOverride == trustDeny:
+        result.error = "--approve cannot be combined with --no-approve"
+        return
+      result.trustOverride = trustApprove
+    of "--no-approve":
+      if result.trustOverride == trustApprove:
+        result.error = "--no-approve cannot be combined with --approve"
+        return
+      result.trustOverride = trustDeny
     of "--session":
       if i + 1 >= args.len:
         result.error = "Usage: nimlet --session ID"
@@ -157,6 +168,26 @@ proc printStartupBanner(agent: Agent, catalogNote: string) =
     echo t.paint(t.dim, catalogNote)
   for line in agent.discoveryWarningLines:
     echo t.paint(t.dim, line)
+
+proc printTrustPrompt(resources: seq[string]) =
+  var tools = 0
+  var extensions = 0
+  var other = 0
+  for path in resources:
+    if path.endsWith("/tool.json"): inc tools
+    elif path.endsWith("/extension.json"): inc extensions
+    else: inc other
+  echo "This project has optional Nimlet customizations:"
+  if tools > 0: echo "  " & $tools & " project tool" & (if tools == 1: "" else: "s")
+  if extensions > 0:
+    echo "  " & $extensions & " project extension" & (if extensions == 1: "" else: "s")
+  if other > 0: echo "  " & $other & " project setting, prompt, or skill file" &
+    (if other == 1: "" else: "s")
+  if extensions > 0:
+    echo "Extensions may run while Nimlet is open; tools run only when used."
+  echo "Nimlet works normally with its built-in tools if you choose No."
+  echo "Load these customizations for this workspace? [y/N]"
+  echo "You can change this later with /trust on or /trust off."
 
 proc runOneShot(agent: var Agent, prompt: string, catalogNote = "") =
   ## Run a single turn from a CLI prompt, then exit.
@@ -280,6 +311,8 @@ proc runMain*() =
     echo "  --session ID     resume a session at startup"
     echo "  --resume         resume the latest session, if any"
     echo "  --yolo           auto-approve tools for this process"
+    echo "  --approve        load project-local resources for this process"
+    echo "  --no-approve     skip project-local resources for this process"
     echo "  --interactive,-i keep the REPL after a CLI prompt"
     echo "  prompt…          run this as the first user message (one-shot unless -i)"
     return
@@ -299,9 +332,21 @@ proc runMain*() =
     stderr.writeLine "Non-interactive mode requires a prompt or piped stdin."
     quit(2)
 
+  var projectTrust = resolveProjectTrust(getCurrentDir(), cli.trustOverride)
+  if projectTrust.required and projectTrust.prompt and not isPrintMode and
+      not isRpcMode and stdinIsTty:
+    printTrustPrompt(projectTrust.resources)
+    let answer = stdin.readLine().strip.toLowerAscii
+    projectTrust.trusted = answer in ["y", "yes"]
+    saveProjectTrust(projectTrust.workspace, projectTrust.trusted)
+  setProjectResourcesTrusted(projectTrust.workspace, projectTrust.trusted)
+  if projectTrust.required and not projectTrust.trusted:
+    stderr.writeLine "Project-local resources skipped (use --approve or /trust on)."
+
   var sessionId = cli.sessionId
   var config = loadConfig(getCurrentDir())
-  discard applyTheme(config.theme, detectDepth(), config.workspace,
+  discard applyTheme(config.theme, detectDepth(),
+    if projectResourcesTrusted(config.workspace): config.workspace else: "",
     ".nimlet", nimletConfigDir())
   if cli.resumeLatest and sessionId.len == 0:
     let sessions = listSessions(config.sessionDir, config.workspace, limit = 1)

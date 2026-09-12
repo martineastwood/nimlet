@@ -35,6 +35,7 @@ type
     slSession
     slNew
     slCompact
+    slTrust
     slPermissions
     slResume
     slFork
@@ -93,6 +94,8 @@ const CommandSpecs* = [
     description: "start a new persistent session"),
   CommandSpec(kind: slCompact, name: "/compact", usage: "/compact [instructions]",
     description: "summarize older context"),
+  CommandSpec(kind: slTrust, name: "/trust", usage: "/trust [on|off]",
+    description: "show or set project-local resource trust"),
   CommandSpec(kind: slPermissions, name: "/permissions", usage: "/permissions [clear]",
     description: "show or clear remembered tool grants"),
   CommandSpec(kind: slResume, name: "/resume", usage: "/resume [ID]",
@@ -136,7 +139,7 @@ proc helpText*(): string =
     @[slPlan, slAct, slHelp],
     @[slModel, slModelsRefresh, slThinking, slProvider, slWeb],
     @[slSession, slStats, slNew, slResume, slFork, slCopy, slName, slCompact],
-    @[slYolo, slPermissions],
+    @[slYolo, slTrust, slPermissions],
     @[slTheme, slSettings],
     @[slDoctor, slReload, slQuit],
   ]
@@ -308,6 +311,11 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
     if parts.len > 2 or (parts.len == 2 and parts[1].toLowerAscii != "clear"):
       return fail("Usage: " & matched.spec.usage)
     if parts.len == 2: result.arg = "clear"
+  of slTrust:
+    if parts.len > 2 or (parts.len == 2 and
+        parts[1].toLowerAscii notin ["on", "off"]):
+      return fail("Usage: " & matched.spec.usage)
+    if parts.len == 2: result.arg = parts[1].toLowerAscii
   of slResume:
     if parts.len > 2:
       return fail("Usage: " & matched.spec.usage)

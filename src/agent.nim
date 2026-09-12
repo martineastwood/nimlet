@@ -2,6 +2,7 @@
 
 import std/[asyncdispatch, json, strutils]
 import config, session, compaction, instructions, skills, models_dev, commands
+import trust
 import nimterm/[ansi, theme]
 import events
 import workspace
@@ -66,6 +67,7 @@ type
   Agent* = object
     mode*: AgentMode
     yolo*: bool
+    projectTrusted*: bool
     config*: AgentConfig
     provider*: Provider
     session*: Session
@@ -308,6 +310,7 @@ proc rescanPlugins(agent: var Agent, ui: TurnSink) =
   clearInstructionCache()
   clearSkillCache()
   clearMentionFileCache()
+  agent.permissions = newPermissionPolicy(agent.config.workspace)
   agent.loadedInstructionPaths = instructionPaths(agent.config.workspace)
   agent.reloadToolsAndHooks()
   reportLines(ui, mlWarn, agent.discoveryWarningLines)
@@ -316,6 +319,7 @@ proc initAgent*(config: AgentConfig, sessionId = "", toolAllowlist: seq[string] 
                 toolsSpecified = false): Agent =
   result.mode = modeAct
   result.config = config
+  result.projectTrusted = projectResourcesTrusted(config.workspace)
   result.toolAllowlist = toolAllowlist
   result.toolAllowlistSet = toolsSpecified
   result.attachProvider()
@@ -329,15 +333,19 @@ proc initAgent*(config: AgentConfig, sessionId = "", toolAllowlist: seq[string] 
 
 proc buildRequest*(agent: Agent): ProviderRequest =
   let opts = providerOptions(agent.config)
+  let systemPrompt = loadSystemPrompt(agent.config.workspace)
   result = ProviderRequest(
     model: agent.config.model,
     sessionId: agent.session.id,
-    system: @[baseSystemPrompt],
+    system: @[if systemPrompt.replacementFound: systemPrompt.replacement
+              else: baseSystemPrompt],
     messages: agent.session.messagesForModel,
     tools: (if agent.mode == modePlan: agent.planTools.definitions else: agent.tools.definitions),
     maxTokens: agent.config.maxTokens,
     options: opts
   )
+  if systemPrompt.appended.len > 0:
+    result.system.add systemPrompt.appended
   if agent.mode == modeAct and webSearchActive(agent.config):
     result.tools.add ToolDefinition(name: "web_search", hosted: "web_search")
     result.system.add "Hosted tool: web_search — the provider searches the public web. Use it for current docs, APIs, and facts not in the repo."
@@ -498,7 +506,8 @@ proc setTheme*(agent: var Agent, value: string): string =
   let name = value.strip.toLowerAscii
   if name.len == 0:
     return agent.config.theme
-  let err = applyTheme(name, workspace = agent.config.workspace,
+  let err = applyTheme(name, workspace = if projectResourcesTrusted(agent.config.workspace):
+      agent.config.workspace else: "",
     appDir = ".nimlet", globalDir = nimletConfigDir())
   if err.len > 0:
     return "ERROR: " & err
@@ -573,7 +582,9 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
       var lines = "theme: " & agent.config.theme
       if agent.config.theme == "auto" or agent.config.theme != currentTheme.name:
         lines.add " → " & currentTheme.name
-      lines.add "\navailable: " & listThemeNames(agent.config.workspace,
+      lines.add "\navailable: " & listThemeNames(
+        if projectResourcesTrusted(agent.config.workspace):
+          agent.config.workspace else: "",
         ".nimlet", nimletConfigDir()).join(", ")
       ui.emit(mlPlain, lines)
     else:
@@ -635,7 +646,8 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
     else:
       ui.emit(mlError, "Could not refresh model metadata; using existing cache.")
   of slNew:
-    discard applyTheme(agent.config.theme, workspace = agent.config.workspace,
+    discard applyTheme(agent.config.theme, workspace = if projectResourcesTrusted(agent.config.workspace):
+      agent.config.workspace else: "",
       appDir = ".nimlet", globalDir = nimletConfigDir())
     let next = loadSession(agent.config.sessionDir, workspace = agent.config.workspace)
     await agent.switchSession(next, ui)
@@ -649,6 +661,22 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
     if res.didCompact: ui.emit(mlOk, res.message)
     else: ui.emit(mlDim, res.message)
     ui.onChange()
+  of slTrust:
+    if projectTrustResources(agent.config.workspace).len == 0:
+      ui.emit(mlPlain, "No project-local resources require trust.")
+    elif cmd.arg.len == 0:
+      ui.emit(mlPlain, if agent.projectTrusted:
+        "Project-local resources: trusted" else:
+        "Project-local resources: not trusted")
+    else:
+      agent.projectTrusted = cmd.arg == "on"
+      setProjectResourcesTrusted(agent.config.workspace, agent.projectTrusted)
+      saveProjectTrust(agent.config.workspace, agent.projectTrusted)
+      agent[].rescanPlugins(ui)
+      ui.emit(if agent.projectTrusted: mlOk else: mlWarn,
+        if agent.projectTrusted: "Project-local resources enabled."
+        else: "Project-local resources disabled.")
+      ui.onChange()
   of slPermissions:
     if cmd.arg == "clear":
       agent.permissions.clearProject()
@@ -682,7 +710,8 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
       if not ok:
         ui.emit(mlPlain, err)
       else:
-        discard applyTheme(agent.config.theme, workspace = agent.config.workspace,
+        discard applyTheme(agent.config.theme, workspace = if projectResourcesTrusted(agent.config.workspace):
+          agent.config.workspace else: "",
           appDir = ".nimlet", globalDir = nimletConfigDir())
         await agent.switchSession(sess, ui)
         agent[].restoreSessionModel()

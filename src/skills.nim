@@ -5,6 +5,7 @@
 
 import std/[algorithm, asyncdispatch, json, os, strutils]
 import config
+import trust
 import nimgent
 import tools/tool
 
@@ -65,11 +66,13 @@ proc readMetadata(path: string): SkillMetadata =
 proc discoverSkillsUncached(workspace: string): seq[SkillMetadata] =
   ## Project and Nimlet-specific roots override portable global skills.
   let root = if dirExists(workspace): expandFilename(workspace) else: workspace
-  for skillsDir in [getHomeDir() / ".agents" / "skills",
-                    nimletConfigDir() / "skills",
-                    root / ".agent" / "skills",
-                    root / ".agents" / "skills",
-                    root / ".nimlet" / "skills"]:
+  var roots = @[getHomeDir() / ".agents" / "skills",
+                 nimletConfigDir() / "skills"]
+  if projectResourcesTrusted(root):
+    roots.add root / ".agent" / "skills"
+    roots.add root / ".agents" / "skills"
+    roots.add root / ".nimlet" / "skills"
+  for skillsDir in roots:
     if not dirExists(skillsDir): continue
     var paths: seq[string]
     for kind, path in walkDir(skillsDir):

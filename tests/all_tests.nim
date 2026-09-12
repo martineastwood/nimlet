@@ -5,6 +5,7 @@ import ../src/workspace
 import ../src/images
 import ../src/session
 import ../src/config
+import ../src/trust
 import ../src/agent
 import ../src/events
 import nimterm/markdown
@@ -25,6 +26,7 @@ import nimterm/events
 import nimterm/widgets/question
 import nimterm/widgets/input
 import nimterm/widgets/transcript
+import nimterm/widget
 import ../src/models_dev
 import ../src/compaction
 import ../src/permissions
@@ -262,6 +264,15 @@ suite "rpc mode":
     check not runtime.pollRpc()
 
 suite "black-box terminal integration":
+  test "transcript shows a scrollbar when content overflows":
+    let transcript = newTranscriptWidget()
+    for i in 0 .. 12:
+      transcript.appendStatus("line " & $i)
+    var canvas = newCanvas(size(20, 4))
+    render(transcript, canvas, rect(0, 0, 20, 4))
+    check canvas.lineText(0).endsWith("┊")
+    check canvas.lineText(3).endsWith("┃")
+
   test "enter submits after mouse focus moves through the transcript and composer":
     let root = freshDir()
     defer: removeDir(root)
@@ -2008,6 +2019,38 @@ suite "slash commands":
       @["- 2 | two", "- 3 | three", "+ 2 | TWO", "+ 3 | THREE", "+ 4 | TWO"]
 
 suite "project instructions and skills":
+  test "project trust gates local resources but not context files":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeExt(root, ".nimlet", "local", "cat >/dev/null; echo '{\"ok\":true}'")
+    createDir(root / ".nimlet" / "skills" / "local")
+    writeFile(root / ".nimlet" / "skills" / "local" / "SKILL.md",
+      "---\nname: local\ndescription: Local skill.\n---\n\nUse it.\n")
+    writeFile(root / ".nimlet" / "SYSTEM.md", "Local system.\n")
+    writeFile(root / "AGENTS.md", "Local instructions.\n")
+    let trust = resolveProjectTrust(root, trustDeny)
+    check trust.required
+    check not trust.trusted
+    check ".nimlet/tools/local/tool.json" in trust.resources
+    setProjectResourcesTrusted(root, false)
+    check discoverExtensions(root).tools.filterIt(it.name == "local").len == 0
+    check discoverSkills(root).filterIt(it.name == "local").len == 0
+    check not loadSystemPrompt(root).replacementFound
+    check "Local instructions." in loadProjectInstructions(root)
+    setProjectResourcesTrusted(root, true)
+    clearSkillCache()
+    check discoverExtensions(root).tools.filterIt(it.name == "local").len == 1
+    check discoverSkills(root).filterIt(it.name == "local").len == 1
+    check loadSystemPrompt(root).replacementFound
+
+  test "trust flags parse independently from tool permissions":
+    check parseCliArgs(["--approve"]).trustOverride == trustApprove
+    check parseCliArgs(["--no-approve"]).trustOverride == trustDeny
+    check parseCliArgs(["--approve", "--no-approve"]).error.len > 0
+    check parseSlash("/trust").kind == slTrust
+    check parseSlash("/trust on").arg == "on"
+    check "Usage: /trust [on|off]" in commandError("/trust maybe")
+
   test "loads AGENTS files from repository root to workspace":
     let root = freshDir()
     defer: removeDir(root)
@@ -2039,6 +2082,38 @@ suite "project instructions and skills":
     let prompt = loadProjectInstructions(root, global)
     check prompt.find("Be terse.") < prompt.find("Use Nim.")
     check "path=\"global\"" in prompt
+
+  test "AGENTS.override.md replaces AGENTS.md at the same scope":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".git")
+    createDir(root / "backend")
+    writeFile(root / "AGENTS.md", "Use Nim.\n")
+    writeFile(root / "backend" / "AGENTS.md", "Use the old backend rules.\n")
+    writeFile(root / "backend" / "AGENTS.override.md",
+      "Use the replacement backend rules.\n")
+
+    let paths = instructionPaths(root / "backend", root / "global.md")
+    let prompt = loadProjectInstructions(root / "backend", root / "global.md")
+    check paths == @[expandFilename(root) / "AGENTS.md",
+                     expandFilename(root) / "backend" / "AGENTS.override.md"]
+    check "Use the replacement backend rules." in prompt
+    check "Use the old backend rules." notin prompt
+
+    createDir(root / "backend" / "src")
+    writeFile(root / "backend" / "src" / "main.nim", "discard\n")
+    check scopedInstructionPaths(root, "backend/src/main.nim") ==
+      @[expandFilename(root) / "backend" / "AGENTS.override.md"]
+
+  test "CLAUDE.md is the fallback context file":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".git")
+    writeFile(root / "CLAUDE.md", "Use the Claude project rules.\n")
+    check instructionPaths(root, root / "global.md") ==
+      @[expandFilename(root) / "CLAUDE.md"]
+    check "Use the Claude project rules." in
+      loadProjectInstructions(root, root / "global.md")
 
   test "scoped instructions load only when a nested path is read":
     let root = freshDir()
@@ -2143,6 +2218,25 @@ suite "project instructions and skills":
     check "version token" in system
     check "Do not commit" in system
     check "Project instructions" notin system
+
+  test "SYSTEM.md replaces the base prompt and APPEND_SYSTEM.md is appended":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet")
+    writeFile(root / ".nimlet" / "SYSTEM.md", "Custom system contract.\n")
+    writeFile(root / ".nimlet" / "APPEND_SYSTEM.md",
+      "Additional system contract.\n")
+    let loaded = loadSystemPrompt(root)
+    check loaded.replacementFound
+    check "Custom system contract." in loaded.replacement
+    check "Additional system contract." in loaded.appended
+    var config = loadConfig(root)
+    config.sessionDir = root / "sessions"
+    config.contextWindow = 128_000
+    let system = initAgent(config).buildRequest.system.join("\n")
+    check "Custom system contract." in system
+    check "Additional system contract." in system
+    check "version token" notin system
 
 suite "models.dev catalog":
   test "lookup uses cached api.json without network":

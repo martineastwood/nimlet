@@ -9,6 +9,7 @@ import std/[algorithm, json, os, strutils, tables, uri]
 import nimgent
 from nimgent/providers/anthropic import anthropicEfforts, anthropicThinkingOptions
 import models_dev, compaction
+import trust
 
 const
   WiredProviders* = ["openrouter", "openai", "anthropic", "hyper", "google"]
@@ -206,8 +207,9 @@ proc pluginRoots*(workspace, folder: string): seq[string] =
   ## Search order: global → `.agent` → `.nimlet`. Later wins by name.
   result.add nimletConfigDir() / folder
   let root = if dirExists(workspace): expandFilename(workspace) else: workspace
-  result.add root / ".agent" / folder
-  result.add root / ".nimlet" / folder
+  if projectResourcesTrusted(root):
+    result.add root / ".agent" / folder
+    result.add root / ".nimlet" / folder
 
 proc collectPluginDirs*(workspace, folder, manifest: string): seq[string] =
   ## Dirs that contain `manifest`, later roots last.
@@ -497,9 +499,13 @@ proc loadConfig*(workspace = getCurrentDir(), configPath = "",
   let projectDir = result.workspace / ".nimlet"
   let projectFile = projectDir / "config.json"
   result.sourcePaths = @[globalFile, projectFile]
-  result.writePath = if dirExists(projectDir): projectFile else: globalFile
+  let useProject = projectResourcesTrusted(result.workspace)
+  result.writePath = if useProject and dirExists(projectDir): projectFile else: globalFile
   let globalDoc = prepareCredentials(loadJsonFile(globalFile), globalFile)
-  let projectDoc = prepareCredentials(loadJsonFile(projectFile), projectFile)
+  let projectDoc = if useProject:
+    prepareCredentials(loadJsonFile(projectFile), projectFile)
+  else:
+    newJObject()
   result.applyDoc(overlay(globalDoc, projectDoc))
 
 proc apiKey*(config: AgentConfig): string =

@@ -4,6 +4,7 @@ import std/[asyncdispatch, json, locks, os, osproc, posix, streams, strutils,
   tables, times]
 import config
 import extensions
+import trust
 import nimgent
 import tools/tool
 import hooks
@@ -101,10 +102,12 @@ proc commandSpec(path: string): tuple[ok: bool, name: string,
 
 proc extensionDirs(workspace: string): seq[string] =
   let root = if dirExists(workspace): expandFilename(workspace) else: workspace
-  for base in [getHomeDir() / ".agents" / "extensions",
-               nimletConfigDir() / "extensions",
-               root / ".agents" / "extensions",
-               root / ".nimlet" / "extensions"]:
+  var bases = @[getHomeDir() / ".agents" / "extensions",
+                nimletConfigDir() / "extensions"]
+  if projectResourcesTrusted(root):
+    bases.add root / ".agents" / "extensions"
+    bases.add root / ".nimlet" / "extensions"
+  for base in bases:
     if not dirExists(base): continue
     for kind, path in walkDir(base):
       if kind == pcDir and fileExists(path / "extension.json"): result.add path

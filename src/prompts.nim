@@ -2,6 +2,7 @@
 
 import std/[algorithm, os, strutils]
 import config
+import trust
 
 const MaxPromptBytes = 100_000
 
@@ -37,11 +38,13 @@ proc parseTemplate(path: string): PromptTemplate =
 proc discoverPrompts*(workspace: string): seq[PromptTemplate] =
   ## Non-recursive; later roots override the same name.
   let root = if dirExists(workspace): expandFilename(workspace) else: workspace
-  for promptsDir in [getHomeDir() / ".agents" / "prompts",
-                     nimletConfigDir() / "prompts",
-                     root / ".agent" / "prompts",
-                     root / ".agents" / "prompts",
-                     root / ".nimlet" / "prompts"]:
+  var roots = @[getHomeDir() / ".agents" / "prompts",
+                 nimletConfigDir() / "prompts"]
+  if projectResourcesTrusted(root):
+    roots.add root / ".agent" / "prompts"
+    roots.add root / ".agents" / "prompts"
+    roots.add root / ".nimlet" / "prompts"
+  for promptsDir in roots:
     if not dirExists(promptsDir): continue
     var paths: seq[string]
     for kind, path in walkDir(promptsDir):
