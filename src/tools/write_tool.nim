@@ -39,7 +39,7 @@ proc makeWriteTool*(ws: Workspace): (ToolDefinition, ToolProc) =
 
     writeFileAtomic(resolved, content)
     clearMentionFileCache(ws.root)
-    let version = hashContent(content)
+    let version = fileVersion(resolved)
     return ToolResult(
       output: fmt"OK — wrote {ws.relative(resolved)}" & "\n" & fmt"version: {version}",
       isError: false)

@@ -1,6 +1,6 @@
 import std/[asyncdispatch, json, os, strutils, terminal]
 import nimgent
-import config, agent, session, models_dev, hooks, events, rpc
+import config, agent, session, hooks, events, rpc
 import ui/[console, nimterm_preview, turn]
 import nimterm/theme
 
@@ -70,15 +70,6 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
       promptParts.add a
     inc i
   result.prompt = promptParts.join(" ").strip
-
-proc catalogStartupNote(quiet = false): string =
-  if not modelsDevCacheStale(): return ""
-  if not quiet:
-    echo currentTheme.paint(currentTheme.dim, "Refreshing model catalog…")
-  if refreshModelsDevCache():
-    "Model catalog updated."
-  else:
-    "Could not refresh model catalog; using cache."
 
 proc mergePipedPrompt*(prompt, piped: string): string =
   let input = piped.strip
@@ -229,7 +220,9 @@ proc runMain*() =
     let sessions = listSessions(config.sessionDir, config.workspace, limit = 1)
     if sessions.len > 0:
       sessionId = sessions[0].id
-  let catalogNote = catalogStartupNote(isPrintMode or isRpcMode)
+  ## Model metadata is loaded from the local cache on demand. Network refresh
+  ## is explicit via `/models refresh`, so startup stays offline and bounded.
+  let catalogNote = ""
   var agent: Agent
   try:
     agent = initAgent(config, sessionId)

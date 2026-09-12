@@ -37,6 +37,9 @@ Rules:
   implement and verify them.
 - Inspect relevant code and project instructions before making assumptions.
   Follow the project's existing conventions.
+- For focused tasks, use one targeted search/read batch, batch independent
+  read-only calls together, and act once you have enough context. Do not
+  inventory unrelated parts of the repository.
 - Make reasonable assumptions for routine details. Ask when ambiguity would
   materially change the result, or when an essential decision is missing.
 - Make the smallest complete change that solves the request. Preserve
@@ -78,6 +81,7 @@ type
     ## Startup warnings from extension discovery (invalid manifests, collisions).
     extensionWarnings*: seq[string]
     extensionRuntime*: ExtensionRuntime
+    loadedInstructionPaths: seq[string]
 
 proc sessionTotals*(agent: Agent): tuple[usage: Usage, cost: float, priced: bool] =
   ## Usage and USD cost summed over every assistant response in the session.
@@ -290,8 +294,10 @@ proc emitAgentEvent(ui: TurnSink, event: NimletEvent) =
   if not ui.agentEvent.isNil: ui.agentEvent(event)
 
 proc rescanPlugins(agent: var Agent, ui: TurnSink) =
+  clearInstructionCache()
   clearSkillCache()
   clearMentionFileCache()
+  agent.loadedInstructionPaths = instructionPaths(agent.config.workspace)
   agent.reloadToolsAndHooks()
   reportLines(ui, mlWarn, agent.discoveryWarningLines)
 
@@ -300,6 +306,7 @@ proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
   result.attachProvider()
   result.session = loadSession(config.sessionDir, sessionId, config.workspace)
   result.permissions = newPermissionPolicy(config.workspace)
+  result.loadedInstructionPaths = instructionPaths(config.workspace)
   discard result.session.recoverInterruptedTools()
   if sessionId.len > 0:
     result.restoreSessionModel()
@@ -349,6 +356,22 @@ Skip checklists for simple requests."""
       result.messages)
   else:
     result.messages = dropImages(result.messages)
+
+proc attachScopedInstructions(agent: ptr Agent, call: ContentBlock,
+                             toolResult: var ToolResult) =
+  if call.name != "read" or toolResult.isError or call.input.isNil or
+      call.input.kind != JObject:
+    return
+  let path = call.input.getOrDefault("path").getStr
+  if path.len == 0: return
+  let paths = scopedInstructionPaths(agent.config.workspace, path)
+  let instructions = loadScopedInstructions(agent.config.workspace, path,
+    agent.loadedInstructionPaths)
+  if instructions.len == 0: return
+  toolResult.output.add "\n\n" & instructions
+  for path in paths:
+    if path notin agent.loadedInstructionPaths:
+      agent.loadedInstructionPaths.add path
 
 proc setThinking*(agent: var Agent, value: string): string =
   try:
@@ -995,6 +1018,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
               toolResult.output = post.output
             if post.hasIsError:
               toolResult.isError = post.isError
+      agent.attachScopedInstructions(call, toolResult)
       agent[].session.addToolResult(call, toolResult.output, toolResult.isError,
         toolResult.images)
       ui.toolResult(toolResult.output, toolResult.isError)

@@ -1,11 +1,12 @@
 ## grep and glob — find files and content without shelling out to bash.
 
-import std/[asyncdispatch, atomics, json, os, re, strutils]
+import std/[asyncdispatch, atomics, json, os, osproc, re, streams, strutils]
 import tool, ../workspace, nimgent
 
 const
   defaultGrepHits = 80
   maxGrepHits = 200
+  maxGrepOutputBytes = 100_000
   defaultGlobHits = 200
   maxScanBytes = 1_000_000
 
@@ -78,6 +79,77 @@ proc isProbablyBinary(content: string): bool =
     if content[i] == '\0': return true
   false
 
+proc isLiteralPattern(pattern: string): bool =
+  for ch in pattern:
+    if ch in {'\\', '.', '^', '$', '*', '+', '?', '(', ')', '[', ']','{', '}', '|'}:
+      return false
+  true
+
+proc isProbablyBinaryFile(path: string): bool =
+  try:
+    let size = min(int(getFileSize(path)), 8192)
+    if size <= 0: return false
+    var prefix = newString(size)
+    let f = open(path)
+    let n = f.readBuffer(addr prefix[0], size)
+    f.close()
+    prefix.setLen(n)
+    isProbablyBinary(prefix)
+  except CatchableError:
+    true
+
+proc rgRelativePath(root, path: string): string =
+  let abs = if path.isAbsolute: path else: root / path
+  relativePath(abs, root).canonRel
+
+proc grepWithRg(root, pattern, glob, relPath: string, maxHits: int,
+                insensitive: bool): tuple[available: bool, hits: seq[string]] =
+  let executable = findExe("rg")
+  if executable.len == 0: return
+
+  var args = @[
+    "--json", "--line-number", "--color=never", "--hidden", "--no-messages",
+    "--glob", "!.git/**"
+  ]
+  if insensitive: args.add "--ignore-case"
+  if glob.len > 0:
+    args.add "--glob"
+    args.add glob
+  args.add "--"
+  args.add pattern
+  args.add if relPath.len == 0: "." else: relPath
+
+  var process: Process
+  try:
+    process = startProcess(executable, args = args, workingDir = root,
+      options = {poUsePath, poStdErrToStdOut})
+  except CatchableError:
+    return
+  defer: process.close()
+  result.available = true
+
+  var line: string
+  while process.outputStream.readLine(line):
+    try:
+      let event = parseJson(line)
+      if event.getOrDefault("type").getStr != "match": continue
+      let data = event["data"]
+      let path = rgRelativePath(root, data["path"]["text"].getStr)
+      var text = data["lines"]["text"].getStr
+      while text.len > 0 and text[^1] in {'\r', '\n'}:
+        text.setLen(text.len - 1)
+      result.hits.add path & ":" & $data["line_number"].getInt & ":" & text
+      if result.hits.len >= maxHits:
+        process.kill()
+        discard process.waitForExit()
+        return
+    except CatchableError:
+      discard
+
+  if process.waitForExit() > 1:
+    result.available = false
+    result.hits.setLen(0)
+
 proc grepWorkspace*(root, pattern, glob, relPath: string, maxHits: int,
                     insensitive: bool): seq[string] =
   ## PCRE search over the current workspace file list. Raises RegexError.
@@ -85,24 +157,30 @@ proc grepWorkspace*(root, pattern, glob, relPath: string, maxHits: int,
   let flags = if insensitive: {reIgnoreCase, reStudy} else: {reStudy}
   let rx = re(pattern, flags)
   let hits = max(1, min(maxHits, maxGrepHits))
+  let literal = if not insensitive and isLiteralPattern(pattern): pattern else: ""
+  let rg = grepWithRg(root, pattern, glob, relPath, hits, insensitive)
+  if rg.available: return rg.hits
   for rel in listWorkspaceFiles(root):
     if not underPrefix(rel, relPath): continue
     if glob.len > 0 and not globMatch(rel, glob): continue
     let path = root / rel
     if not fileExists(path): continue
-    var content: string
     try:
       if getFileSize(path) > maxScanBytes: continue
-      content = readFile(path)
+      if isProbablyBinaryFile(path): continue
+      let f = open(path)
+      defer: f.close()
+      var line = ""
+      var lineno = 0
+      while f.readLine(line):
+        inc lineno
+        let matched = if literal.len > 0: literal in line
+                      else: find(line, rx) >= 0
+        if not matched: continue
+        result.add rel & ":" & $lineno & ":" & line
+        if result.len >= hits: return
     except CatchableError:
       continue
-    if isProbablyBinary(content): continue
-    var lineno = 0
-    for line in content.splitLines:
-      inc lineno
-      if find(line, rx) < 0: continue
-      result.add rel & ":" & $lineno & ":" & line
-      if result.len >= hits: return
 
 proc globWorkspace*(root, pattern, relPath: string, maxHits: int): seq[string] =
   if pattern.len == 0: return
@@ -156,6 +234,9 @@ proc makeGrepTool*(ws: Workspace): (ToolDefinition, ToolProc) =
     if hits.len == 0:
       return ToolResult(output: "No matches.")
     var buf = hits.join("\n")
+    if buf.len > maxGrepOutputBytes:
+      buf = buf[0 ..< maxGrepOutputBytes] &
+        "\n[output truncated; narrow the pattern or path]"
     if hits.len >= max(1, min(maxHits, maxGrepHits)):
       buf.add "\n[" & $hits.len & " matches, more omitted]"
     return ToolResult(output: buf)

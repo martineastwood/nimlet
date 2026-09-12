@@ -97,8 +97,9 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
                        modelPicker: ModelPicker, sessionId = ""): NimtermScreen =
   let t = currentTheme
   let panelStyle = t.themedStyle(t.text, t.panelBg)
+  let composerStyle = t.themedStyle(t.text)
+  let composerAccentStyle = t.themedStyle(t.accent, "", {attrBold})
   let selectedStyle = t.themedStyle(t.selectedFg, t.selectedBg, {attrBold})
-  let cursorBarStyle = t.themedStyle(t.accent, t.panelBg, {attrBold})
   let descriptionStyle = t.themedStyle(t.muted, t.panelBg)
   result = NimtermScreen(
     header: newCard("nimlet coding agent", headerBody,
@@ -108,8 +109,8 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
       t.themedStyle(t.accent), t.themedStyle(t.heading), descriptionStyle,
       selectedStyle),
     transcript: newTranscriptWidget(),
-    composer: newInput(style = panelStyle, cursorStyle = selectedStyle,
-      cursorBarStyle = cursorBarStyle),
+    composer: newInput(style = composerStyle, prefixStyle = composerAccentStyle,
+      cursorStyle = composerAccentStyle, cursorBarStyle = composerAccentStyle),
     workspace: workspace,
     sessionDir: sessionDir,
     modelPicker: modelPicker, headerSessionId: sessionId,
@@ -262,9 +263,10 @@ proc refreshMenuTheme(screen: NimtermScreen) =
   screen.menu.selectedDescriptionStyle = screen.menu.selectedStyle
   screen.menu.borderStyle = t.themedStyle(t.accent)
   screen.menu.titleStyle = t.themedStyle(t.heading)
-  screen.composer.style = screen.menu.style
-  screen.composer.cursorStyle = screen.menu.selectedStyle
-  screen.composer.cursorBarStyle = t.themedStyle(t.accent, t.panelBg, {attrBold})
+  screen.composer.style = t.themedStyle(t.text)
+  screen.composer.prefixStyle = t.themedStyle(t.accent, "", {attrBold})
+  screen.composer.cursorStyle = screen.composer.prefixStyle
+  screen.composer.cursorBarStyle = screen.composer.prefixStyle
   screen.transcript.userStyle = t.themedStyle(t.muted)
   screen.transcript.assistantStyle = t.themedStyle(t.text)
   screen.transcript.thinkingStyle = t.themedStyle(t.muted, "",
@@ -548,9 +550,10 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
   screen.composer.paddingTop = verticalPadding
   screen.composer.paddingBottom = verticalPadding
   let footerRow = h - 1
-  let maxInputRows = max(1, footerRow - headerHeight)
+  const inputRuleRows = 1
+  let maxInputRows = max(1, footerRow - headerHeight - inputRuleRows)
   let inputRows = min(maxInputRows, textRows + verticalPadding * 2)
-  let inputTop = max(0, footerRow - inputRows)
+  let inputTop = max(headerHeight, footerRow - inputRuleRows - inputRows)
   let widgetRows = min(screen.extensionWidgetLines.len,
     max(0, inputTop - headerHeight))
   let widgetTop = inputTop - widgetRows
@@ -581,7 +584,9 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
         currentTheme.paint(currentTheme.muted,
           screen.extensionWidgetLines[screen.extensionWidgetLines.len - widgetRows + i]),
         defaultStyle(), w)
-    screen.composer.render(canvas, rect(0, inputTop, w, inputRows))
+    let ruleStyle = currentTheme.themedStyle(currentTheme.muted, "", {attrDim})
+    canvas.writeText(0, inputTop, "─".repeat(w), ruleStyle, w)
+    screen.composer.render(canvas, rect(0, inputTop + inputRuleRows, w, inputRows))
   if not screen.questionWidget.isNil:
     screen.questionWidget.render(canvas, rect(0, questionTop, w, questionHeight))
   var footer = screen.footer

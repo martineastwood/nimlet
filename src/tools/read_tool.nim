@@ -6,10 +6,23 @@ import tool, ../workspace, ../images, nimgent
 const
   MaxReadBytes = 200_000
 
+proc imageMimeAt(path: string): string =
+  try:
+    let size = min(int(getFileSize(path)), 32_768)
+    if size <= 0: return
+    var head = newString(size)
+    let f = open(path)
+    let n = f.readBuffer(addr head[0], size)
+    f.close()
+    head.setLen(n)
+    sniffImageMime(head)
+  except CatchableError:
+    ""
+
 proc makeReadTool*(ws: Workspace): (ToolDefinition, ToolProc) =
   let def = ToolDefinition(
     name: "read",
-    description: "Read all or part of a file. Returns numbered lines and a version hash. png/jpeg/gif/webp files are returned as image content.",
+    description: "Read all or part of a file. Returns numbered lines and a version token. png/jpeg/gif/webp files are returned as image content.",
     inputSchema: %*{
       "type": "object",
       "properties": {
@@ -33,50 +46,75 @@ proc makeReadTool*(ws: Workspace): (ToolDefinition, ToolProc) =
     if not fileExists(resolved):
       return ToolResult(output: "File not found: " & path, isError: true)
 
-    let rawContent = readFile(resolved)
-    let classified = classifyImage(rawContent)
-    if classified.mime.len > 0:
-      if not classified.ok:
-        return ToolResult(output: classified.err, isError: true)
-      let version = hashContent(rawContent)
+    let mime = imageMimeAt(resolved)
+    if mime.len > 0:
+      if getFileSize(resolved) > MaxImageBytes.int64:
+        return ToolResult(output: "image too large (" & $getFileSize(resolved) &
+          " bytes; max " & $MaxImageBytes & ")", isError: true)
       var buf = fmt"path: {ws.relative(resolved)}" & "\n"
-      buf.add fmt"version: {version}" & "\n"
-      buf.add classified.mime & " " & $rawContent.len & " bytes\n"
+      buf.add fmt"version: {fileVersion(resolved)}" & "\n"
+      buf.add mime & " " & $getFileSize(resolved) & " bytes\n"
       return ToolResult(output: buf, images: @[
-        ImageContent(mimeType: classified.mime,
+        ImageContent(mimeType: mime,
           path: ws.relative(resolved).replace('\\', '/'))])
-    if rawContent.len > MaxReadBytes and
-       "start_line" notin input and "end_line" notin input:
-      return ToolResult(
-        output: fmt"File too large ({rawContent.len} bytes). Supply start_line/end_line to read a portion.",
-        isError: true)
-
-    let version = hashContent(rawContent)
-    let allLines = rawContent.splitLines
-    let totalLines = allLines.len
 
     var startLine = 1
-    var endLine = totalLines
+    var endLine = int.high
     if "start_line" in input:
       startLine = max(1, input["start_line"].getInt)
     if "end_line" in input:
-      endLine = min(totalLines, input["end_line"].getInt)
-    if startLine > totalLines:
-      return ToolResult(output: fmt"start_line {startLine} exceeds file length ({totalLines} lines).", isError: true)
+      endLine = input["end_line"].getInt
+    if endLine < startLine:
+      return ToolResult(output: "end_line must be at least start_line.",
+        isError: true)
 
+    let version = fileVersion(resolved)
+    var f: File
+    try:
+      f = open(resolved, fmRead)
+    except CatchableError as e:
+      return ToolResult(output: e.msg, isError: true)
+    defer: f.close()
+
+    var line: string
+    var lineNo = 0
+    var outputBytes = 0
+    var selected: seq[tuple[number: int, text: string]]
+    var truncated = false
+    var reachedEnd = false
+    while f.readLine(line):
+      inc lineNo
+      if lineNo < startLine: continue
+      let renderedBytes = len($lineNo) + 3 + line.len
+      if outputBytes + renderedBytes > MaxReadBytes:
+        truncated = true
+        break
+      selected.add (lineNo, line)
+      outputBytes += renderedBytes
+      if lineNo >= endLine:
+        reachedEnd = true
+        break
+
+    if selected.len == 0 and lineNo < startLine:
+      return ToolResult(output: fmt"start_line {startLine} exceeds file length ({lineNo} lines).",
+        isError: true)
+
+    let complete = not truncated and not reachedEnd
     var buf = fmt"path: {ws.relative(resolved)}" & "\n"
     buf.add fmt"version: {version}" & "\n"
-    buf.add fmt"lines: {startLine}-{endLine} of {totalLines}" & "\n\n"
-
-    let width = len($endLine)
-    var outputLen = buf.len
-    for i in (startLine - 1) ..< min(endLine, totalLines):
-      let line = align($(i + 1), width) & " | " & allLines[i] & "\n"
-      outputLen += line.len
-      if outputLen > MaxReadBytes:
-        buf.add "[output truncated]\n"
-        break
-      buf.add line
+    if complete:
+      buf.add fmt"lines: {startLine}-{lineNo} of {lineNo}" & "\n\n"
+    else:
+      let last = if selected.len > 0: selected[^1].number else: startLine
+      buf.add fmt"lines: {startLine}-{last}" & "\n\n"
+    let width = len($(if selected.len > 0: selected[^1].number else: startLine))
+    for item in selected:
+      buf.add align($item.number, width) & " | " & item.text & "\n"
+    if truncated:
+      let next = if selected.len > 0: selected[^1].number + 1 else: startLine
+      buf.add fmt"[output truncated; use start_line={next} to continue]\n"
+    elif reachedEnd and endLine < int.high:
+      buf.add fmt"[read through line {endLine}; use start_line={endLine + 1} to continue]\n"
 
     return ToolResult(output: buf, isError: false)
 

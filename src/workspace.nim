@@ -1,12 +1,16 @@
 ## Workspace boundary enforcement and file helpers shared by the file tools.
 
-import std/[os, osproc, streams, strutils, algorithm]
+import std/[os, osproc, streams, strutils, algorithm, times]
 
 type
   Workspace* = object
     root*: string
 
   WorkspaceError* = object of CatchableError
+
+  WorkspaceFileCache = object
+    root: string
+    files: seq[string]
 
 proc initWorkspace*(root: string): Workspace =
   Workspace(root: expandFilename(root))
@@ -18,6 +22,14 @@ proc hashContent*(content: string): string =
   for ch in content:
     hash = (hash xor uint64(ord(ch))) * 1099511628211'u64
   toHex(hash, 16).toLowerAscii()
+
+proc fileVersion*(path: string): string =
+  ## Cheap change token for tools that only need optimistic concurrency checks.
+  try:
+    let stamp = getLastModificationTime(path).toUnixFloat
+    $getFileSize(path) & ":" & $stamp
+  except CatchableError:
+    ""
 
 proc resolve*(ws: Workspace, path: string): string =
   ## Resolve a tool-supplied path against the workspace root and reject
@@ -107,6 +119,7 @@ type
     paths: seq[MentionPath]
 
 var mentionIndexes: seq[MentionIndex]
+var workspaceFileCaches: seq[WorkspaceFileCache]
 
 proc canonRel*(path: string): string =
   path.replace('\\', '/')
@@ -175,11 +188,25 @@ proc walkWorkspaceFiles(root: string): seq[string] =
 
 proc listWorkspaceFiles*(root: string): seq[string] =
   ## Git-tracked + untracked (honoring gitignore) when `root` is a repo.
-  ## Otherwise a bounded directory walk. No cache — callers are grep/glob
-  ## and @-mentions (already keyed in the interactive UI).
+  ## Otherwise a bounded directory walk. Git workspaces are cached until a
+  ## workspace mutation or reload invalidates the index.
+  if dirExists(root / ".git"):
+    for cache in workspaceFileCaches:
+      if cache.root == root:
+        return cache.files
   result = gitTrackedFiles(root)
   if result.len == 0 and not dirExists(root / ".git"):
     result = walkWorkspaceFiles(root)
+  if dirExists(root / ".git"):
+    workspaceFileCaches.add WorkspaceFileCache(root: root, files: result)
+
+proc clearWorkspaceFileCache*(root = "") =
+  if root.len == 0:
+    workspaceFileCaches.setLen(0)
+    return
+  for i in countdown(workspaceFileCaches.high, 0):
+    if workspaceFileCaches[i].root == root:
+      workspaceFileCaches.delete(i)
 
 proc mentionDirsOf(files: seq[string]): seq[string] =
   ## Unique parent folders of `files`, deepest first, as `dir/` entries.
@@ -194,6 +221,7 @@ proc mentionDirsOf(files: seq[string]): seq[string] =
       dir = dir.parentDir
 
 proc clearMentionFileCache*(root = "") =
+  clearWorkspaceFileCache(root)
   if root.len == 0:
     mentionIndexes.setLen(0)
     return

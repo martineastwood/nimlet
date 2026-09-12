@@ -18,6 +18,7 @@ import ../src/ui/nimterm_screen
 import nimterm/ansi
 import nimterm/input
 import nimterm/keys
+import nimterm/style
 import nimterm/theme
 import nimterm/events
 import nimterm/widgets/question
@@ -367,6 +368,24 @@ suite "black-box terminal integration":
     check "startup-model" in backend.frame.plainText
     check "#" & agent.session.id notin backend.frame.plainText
 
+  test "composer is transparent with a muted rule and cyan prompt":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    var app = termapp.newApp(backend, screen)
+    app.render()
+    let promptY = screen.composer.area.y + screen.composer.paddingTop
+    let ruleY = screen.composer.area.y - 1
+    check backend.frame.lineText(ruleY).startsWith("─")
+    check backend.frame.getCell(10, promptY).style.background.kind == colorDefault
+    check backend.frame.getCell(0, ruleY).style.background.kind == colorDefault
+    check backend.frame.getCell(2, promptY).glyph.int == ord('>')
+    check backend.frame.getCell(2, promptY).style.foreground.kind != colorDefault
+
   test "banner shortens the home directory":
     check displayPath(getHomeDir() / "repos" / "project") ==
       "~" / "repos" / "project"
@@ -540,6 +559,21 @@ suite "workspace and file tools":
     check "version:" in result.output
     check "2 | two" in result.output
 
+  test "read paginates large text without rejecting the file":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "large.txt", "line\n".repeat(100_000))
+    let first = invoke(makeReadTool(initWorkspace(root)),
+      %*{"path": "large.txt"})
+    check not first.isError
+    check "output truncated" in first.output
+    let page = invoke(makeReadTool(initWorkspace(root)), %*{
+      "path": "large.txt", "start_line": 50_000, "end_line": 50_001
+    })
+    check not page.isError
+    check "50000 | line" in page.output
+    check "50001 | line" in page.output
+
   test "read rejects traversal":
     let root = freshDir()
     defer: removeDir(root)
@@ -552,7 +586,7 @@ suite "workspace and file tools":
     defer: removeDir(root)
     let path = root / "sample.txt"
     writeFile(path, "before\nkeep\n")
-    let version = hashContent(readFile(path))
+    let version = fileVersion(path)
     let result = invoke(makeEditTool(initWorkspace(root)), %*{
       "path": "sample.txt",
       "old_text": "before",
@@ -1965,6 +1999,21 @@ suite "project instructions and skills":
     let prompt = loadProjectInstructions(root, global)
     check prompt.find("Be terse.") < prompt.find("Use Nim.")
     check "path=\"global\"" in prompt
+
+  test "scoped instructions load only when a nested path is read":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".git")
+    createDir(root / "backend" / "src")
+    writeFile(root / "AGENTS.md", "Use Nim.\n")
+    writeFile(root / "backend" / "AGENTS.md", "Run backend tests.\n")
+    writeFile(root / "backend" / "src" / "main.nim", "discard\n")
+    let rootPath = expandFilename(root) / "AGENTS.md"
+    check scopedInstructionPaths(root, "backend/src/main.nim") ==
+      @[expandFilename(root) / "backend" / "AGENTS.md"]
+    let scoped = loadScopedInstructions(root, "backend/src/main.nim", @[rootPath])
+    check "Run backend tests." in scoped
+    check "Use Nim." notin scoped
 
   test "discovers skill metadata and loads bodies lazily":
     let root = freshDir()

@@ -84,7 +84,7 @@ proc makeEditTool*(ws: Workspace): (ToolDefinition, ToolProc) =
             "required": ["old_text", "new_text"]
           }
         },
-        "expected_version": {"type": "string", "description": "Version hash from a previous read. Edit is rejected if the file has changed since."}
+        "expected_version": {"type": "string", "description": "Version token from a previous read. Edit is rejected if the file has changed since."}
       },
       "required": ["path"]
     }
@@ -102,7 +102,7 @@ proc makeEditTool*(ws: Workspace): (ToolDefinition, ToolProc) =
       return ToolResult(output: "File not found: " & path, isError: true)
 
     let content = readFile(resolved)
-    let currentVersion = hashContent(content)
+    let currentVersion = fileVersion(resolved)
 
     if "expected_version" in input:
       let expected = input["expected_version"].getStr
@@ -123,7 +123,7 @@ proc makeEditTool*(ws: Workspace): (ToolDefinition, ToolProc) =
 
     writeFileAtomic(resolved, applied.text)
     clearMentionFileCache(ws.root)
-    let newVersion = hashContent(applied.text)
+    let newVersion = fileVersion(resolved)
     var outp = fmt"OK — {ws.relative(resolved)}" & "\n" &
                fmt"version: {newVersion}"
     if reps.len > 1:
