@@ -471,9 +471,12 @@ proc loadSession*(sessionDir: string, id = "", workspace = ""): Session =
   ## New session when `id` is empty; otherwise resume an existing JSONL file.
   if id.len == 0:
     result = initSession()
-    result.path = sessionDir / (result.id & ".jsonl")
+    if sessionDir.len > 0:
+      result.path = sessionDir / (result.id & ".jsonl")
     result.workspace = workspace
     return
+  if sessionDir.len == 0:
+    raise newException(ValueError, "Sessions are disabled.")
   let path = sessionDir / (id & ".jsonl")
   let err = sessionFileError(id, path)
   if err.len > 0:

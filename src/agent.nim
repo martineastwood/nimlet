@@ -72,6 +72,8 @@ type
     permissions*: PermissionPolicy
     tools*: ToolRegistry
     planTools: ToolRegistry
+    toolAllowlist*: seq[string]
+    toolAllowlistSet*: bool
     ## Startup warnings from extension discovery (invalid manifests, collisions).
     extensionWarnings*: seq[string]
     extensionRuntime*: ExtensionRuntime
@@ -198,6 +200,10 @@ proc applyModel*(agent: var Agent, id: string, persist = true) =
   if persist:
     persistModel(agent.config)
 
+proc applyApiKey*(agent: var Agent, key: string) =
+  agent.config.apiKeySource = key
+  agent.attachProvider()
+
 proc modelPickerFrom*(agent: Agent): ModelPicker =
   ModelPicker(
     currentModel: agent.config.model,
@@ -245,6 +251,9 @@ proc reloadToolsAndHooks*(agent: var Agent) =
   agent.extensionRuntime.stop()
   agent.extensionRuntime = startExtensions(agent.config.workspace, agent.session.id)
   agent.extensionRuntime.registerTools(reg, addr planTools)
+  if agent.toolAllowlistSet:
+    reg.restrict(agent.toolAllowlist)
+    planTools.restrict(agent.toolAllowlist)
   agent.planTools = planTools
   agent.tools = reg
   var commands: seq[ExtensionCommandInfo]
@@ -303,9 +312,12 @@ proc rescanPlugins(agent: var Agent, ui: TurnSink) =
   agent.reloadToolsAndHooks()
   reportLines(ui, mlWarn, agent.discoveryWarningLines)
 
-proc initAgent*(config: AgentConfig, sessionId = ""): Agent =
+proc initAgent*(config: AgentConfig, sessionId = "", toolAllowlist: seq[string] = @[],
+                toolsSpecified = false): Agent =
   result.mode = modeAct
   result.config = config
+  result.toolAllowlist = toolAllowlist
+  result.toolAllowlistSet = toolsSpecified
   result.attachProvider()
   result.session = loadSession(config.sessionDir, sessionId, config.workspace)
   result.permissions = newPermissionPolicy(config.workspace)

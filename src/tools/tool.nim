@@ -86,6 +86,15 @@ proc definitions*(reg: ToolRegistry): seq[ToolDefinition] =
   for entry in reg.tools.values:
     result.add entry.definition
 
+proc restrict*(reg: var ToolRegistry, allowed: openArray[string]) =
+  var kept = initOrderedTable[string, ToolEntry]()
+  for name, entry in reg.tools:
+    for wanted in allowed:
+      if name.toLowerAscii == wanted.toLowerAscii:
+        kept[name] = entry
+        break
+  reg.tools = kept
+
 proc contains*(reg: ToolRegistry, name: string): bool =
   name in reg.tools
 

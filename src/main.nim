@@ -1,4 +1,4 @@
-import std/[asyncdispatch, json, os, strutils, terminal]
+import std/[asyncdispatch, json, os, sequtils, strutils, terminal]
 import nimgent
 import config, agent, session, hooks, events, rpc
 import ui/[console, nimterm_preview, turn]
@@ -9,6 +9,13 @@ type
     help*: bool
     print*: bool
     mode*: string
+    provider*: string
+    model*: string
+    thinking*: string
+    apiKey*: string
+    tools*: seq[string]
+    toolsSpecified*: bool
+    noSession*: bool
     resumeLatest*: bool
     yolo*: bool
     sessionId*: string
@@ -48,6 +55,61 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
         result.error = "Unknown mode: " & args[i + 1] & " (use json|rpc)"
         return
       inc i
+    of "--provider":
+      if i + 1 >= args.len:
+        result.error = "Usage: nimlet --provider NAME"
+        return
+      result.provider = args[i + 1].strip
+      if result.provider.len == 0:
+        result.error = "Provider must not be empty"
+        return
+      inc i
+    of "--model":
+      if i + 1 >= args.len:
+        result.error = "Usage: nimlet --model ID"
+        return
+      result.model = args[i + 1].strip
+      if result.model.len == 0:
+        result.error = "Model must not be empty"
+        return
+      inc i
+    of "--thinking":
+      if i + 1 >= args.len:
+        result.error = "Usage: nimlet --thinking LEVEL"
+        return
+      result.thinking = args[i + 1].strip
+      if result.thinking.len == 0:
+        result.error = "Thinking level must not be empty"
+        return
+      inc i
+    of "--api-key":
+      if i + 1 >= args.len:
+        result.error = "Usage: nimlet --api-key KEY"
+        return
+      result.apiKey = args[i + 1]
+      if result.apiKey.len == 0:
+        result.error = "API key must not be empty"
+        return
+      inc i
+    of "--tools":
+      if i + 1 >= args.len:
+        result.error = "Usage: nimlet --tools NAME[,NAME…]"
+        return
+      result.toolsSpecified = true
+      let value = args[i + 1].strip
+      if value.toLowerAscii == "none":
+        result.tools = @[]
+      else:
+        for name in value.split(','):
+          let tool = name.strip
+          if tool.len == 0:
+            result.error = "Tool names must not be empty"
+            return
+          if tool.toLowerAscii notin result.tools.mapIt(it.toLowerAscii):
+            result.tools.add tool
+      inc i
+    of "--no-session":
+      result.noSession = true
     of "--resume":
       result.resumeLatest = true
     of "--yolo":
@@ -69,6 +131,8 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
       sawPrompt = true
       promptParts.add a
     inc i
+  if result.noSession and (result.resumeLatest or result.sessionId.len > 0):
+    result.error = "--no-session cannot be combined with --resume or --session"
   result.prompt = promptParts.join(" ").strip
 
 proc mergePipedPrompt*(prompt, piped: string): string =
@@ -190,6 +254,12 @@ proc runMain*() =
     echo "  --print,-p       print only the response and exit"
     echo "  --mode json      emit versioned JSONL events and exit"
     echo "  --mode rpc       serve JSONL commands until shutdown or EOF"
+    echo "  --provider NAME  use a provider for this process"
+    echo "  --model ID       use a model for this process"
+    echo "  --thinking LEVEL use a thinking level for this process"
+    echo "  --api-key KEY    use an API key for this process"
+    echo "  --tools LIST     restrict tools (comma-separated, or none)"
+    echo "  --no-session     do not read or write a session"
     echo "  --session ID     resume a session at startup"
     echo "  --resume         resume the latest session, if any"
     echo "  --yolo           auto-approve tools for this process"
@@ -213,7 +283,7 @@ proc runMain*() =
     quit(2)
 
   var sessionId = cli.sessionId
-  let config = loadConfig(getCurrentDir())
+  var config = loadConfig(getCurrentDir())
   discard applyTheme(config.theme, detectDepth(), config.workspace,
     ".nimlet", nimletConfigDir())
   if cli.resumeLatest and sessionId.len == 0:
@@ -225,7 +295,17 @@ proc runMain*() =
   let catalogNote = ""
   var agent: Agent
   try:
-    agent = initAgent(config, sessionId)
+    if cli.noSession:
+      config.sessionDir = ""
+    agent = initAgent(config, sessionId, cli.tools, cli.toolsSpecified)
+    if cli.provider.len > 0:
+      agent.applyProvider(cli.provider, persist = false)
+    if cli.model.len > 0:
+      agent.applyModel(cli.model, persist = false)
+    if cli.thinking.len > 0:
+      agent.config.thinking = normalizeThinking(cli.thinking)
+    if cli.apiKey.len > 0:
+      agent.applyApiKey(cli.apiKey)
   except CatchableError as e:
     stderr.writeLine "STARTUP_FAILED"
     stderr.writeLine e.msg

@@ -13,7 +13,7 @@ jobs:
       matrix:
         nim-version: ["stable", "2.0.0"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # nimlet's nim.cfg resolves the sibling packages via --path entries.
       # actions/checkout refuses paths outside the workspace, so clone instead.

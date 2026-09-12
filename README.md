@@ -143,6 +143,10 @@ done: `./nimlet fix the failing parser test`. Add `-i` /
 Use `-p` / `--print` for clean stdout containing only the final response.
 Piped stdin selects print mode automatically and is placed before an optional
 CLI instruction: `cat README.md | ./nimlet -p "Summarize this text"`.
+Startup overrides are ephemeral: `--provider NAME`, `--model ID`,
+`--thinking LEVEL`, `--api-key KEY`, and `--tools read,bash` (use
+`--tools none` to disable tools). `--no-session` keeps the transcript in
+memory and cannot be combined with `--resume` or `--session`.
 Use `--mode json` instead for versioned JSONL events. Every stdout line is one
 object with `"version":1`. Lifecycle types are `session_start`, `run_start`,
 `step_start`, `step_end`, `run_end`, and `session_end`; message types are

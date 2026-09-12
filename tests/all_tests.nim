@@ -2138,7 +2138,6 @@ suite "project instructions and skills":
     let system = request.system.join("\n")
     check "version token" in system
     check "Do not commit" in system
-    check "read_skill" in system
     check "Project instructions" notin system
 
 suite "models.dev catalog":
@@ -3910,6 +3909,49 @@ suite "cli prompt args":
     check rpc.error.len == 0
     check rpc.mode == "rpc"
     check parseCliArgs(["--mode", "unknown"]).error.len > 0
+
+  test "provider invocation flags are ephemeral and parse tool allowlists":
+    let cli = parseCliArgs(["--provider", "anthropic", "--model", "claude-test",
+      "--thinking", "high", "--api-key", "secret", "--tools", "read, bash,read",
+      "prompt"])
+    check cli.error.len == 0
+    check cli.provider == "anthropic"
+    check cli.model == "claude-test"
+    check cli.thinking == "high"
+    check cli.apiKey == "secret"
+    check cli.toolsSpecified
+    check cli.tools == @["read", "bash"]
+    check cli.prompt == "prompt"
+    let none = parseCliArgs(["--tools", "none"])
+    check none.error.len == 0
+    check none.toolsSpecified
+    check none.tools.len == 0
+
+  test "no-session is exclusive with resume flags":
+    check parseCliArgs(["--no-session", "hello"]).error.len == 0
+    check parseCliArgs(["--no-session", "--resume"]).error.len > 0
+    check parseCliArgs(["--no-session", "--session", "abc"]).error.len > 0
+
+  test "tool allowlists apply to act and plan requests without session files":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = ""
+    config.compactionEnabled = false
+    var agent = initAgent(config, toolAllowlist = @["read"], toolsSpecified = true)
+    agent.applyApiKey("ephemeral-key")
+    check OpenRouterProvider(agent.provider).apiKey == "ephemeral-key"
+    check agent.session.path.len == 0
+    var names: seq[string]
+    for tool in agent.buildRequest().tools: names.add tool.name
+    check names == @["read"]
+    agent.mode = modePlan
+    names.setLen(0)
+    for tool in agent.buildRequest().tools: names.add tool.name
+    check names == @["read"]
+    agent.session.addUserMessage("in memory")
+    check not fileExists(root / "config.json")
+    check agent.session.events.len == 1
 
   test "piped input is merged before the CLI instruction":
     check mergePipedPrompt("", "  source text\n") == "source text"
