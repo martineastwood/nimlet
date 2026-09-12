@@ -1,0 +1,5 @@
+@media (min-width: 64rem) {
+	nav.sidebar .sidebar-content .entry-link {
+		font-size: 0.875rem;
+	}
+}

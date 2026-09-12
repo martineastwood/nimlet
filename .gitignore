@@ -12,3 +12,9 @@ AGENTS.md
 nimble.develop
 nimble.paths
 nimbledeps
+
+# Docs site (Astro)
+docs/node_modules/
+docs/dist/
+docs/.astro/
+docs/*.tsbuildinfo

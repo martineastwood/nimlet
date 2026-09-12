@@ -7,6 +7,7 @@ bin           = @["nimlet"]
 
 requires "nim >= 2.0.0"
 requires "nimgent >= 0.1.0"
+requires "nimwire >= 0.1.0"
 requires "nimterm >= 0.1.0"
 
 task test, "Run the test suite":

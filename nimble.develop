@@ -3,6 +3,7 @@
   "includes": [],
   "dependencies": [
     "../nimterm",
-    "../nimgent"
+    "../nimgent",
+    "../nimwire"
   ]
 }
