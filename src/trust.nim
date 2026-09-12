@@ -39,7 +39,7 @@ proc addManifestDirs(result: var seq[string], root, relative, manifest: string) 
   var paths: seq[string]
   for kind, path in walkDir(base):
     if kind == pcDir and fileExists(path / manifest):
-      paths.add relativePath(path, root) / manifest
+      paths.add (relativePath(path, root) / manifest).canonRel
   paths.sort()
   result.add paths
 
@@ -49,7 +49,7 @@ proc addJsonFiles(result: var seq[string], root, relative: string) =
   var paths: seq[string]
   for kind, path in walkDir(base):
     if kind == pcFile and path.toLowerAscii.endsWith(".json"):
-      paths.add relativePath(path, root)
+      paths.add relativePath(path, root).canonRel
   paths.sort()
   result.add paths
 
@@ -59,7 +59,7 @@ proc addMarkdownFiles(result: var seq[string], root, relative: string) =
   var paths: seq[string]
   for kind, path in walkDir(base):
     if kind == pcFile and path.toLowerAscii.endsWith(".md"):
-      paths.add relativePath(path, root)
+      paths.add relativePath(path, root).canonRel
   paths.sort()
   result.add paths
 

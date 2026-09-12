@@ -1,6 +1,8 @@
 ## Nimlet terminal controller: turns, actions, interactions, and recovery.
 
-import std/[asyncdispatch, posix, strutils, times]
+import std/[asyncdispatch, strutils, times]
+when not defined(windows):
+  import posix
 import nimgent
 import nimterm/[app, backend, events, keys, transcript, widget, widgets]
 import nimterm/term
@@ -77,16 +79,20 @@ proc processExtensionUpdates(controller: NimletController) =
   controller.agent.applyExtensionActions(controller.ui)
   controller.refreshFooter()
 
-proc drainCancelPipe(controller: NimletController) =
-  if controller.cancelRead < 0: return
-  var bytes: array[64, char]
-  while posix.read(controller.cancelRead, bytes.addr, bytes.len) > 0:
-    discard
+when defined(windows):
+  proc drainCancelPipe(controller: NimletController) = discard controller
+  proc signalCancel(controller: NimletController) = discard controller
+else:
+  proc drainCancelPipe(controller: NimletController) =
+    if controller.cancelRead < 0: return
+    var bytes: array[64, char]
+    while posix.read(controller.cancelRead, bytes.addr, bytes.len) > 0:
+      discard
 
-proc signalCancel(controller: NimletController) =
-  if controller.cancelWrite < 0: return
-  var byte = '\1'
-  discard posix.write(controller.cancelWrite, byte.addr, 1)
+  proc signalCancel(controller: NimletController) =
+    if controller.cancelWrite < 0: return
+    var byte = '\1'
+    discard posix.write(controller.cancelWrite, byte.addr, 1)
 
 proc takeQueue(queue: var seq[string], mode: string): seq[string] =
   if queue.len == 0: return
@@ -449,12 +455,13 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
   result = NimletController(screen: screen, app: appPtr, agent: agent,
     turns: newNimletTurnSource(), cancelRead: -1, cancelWrite: -1,
     steeringQueue: @[], followUpQueue: @[])
-  var fds: array[2, cint]
-  if posix.pipe(fds) == 0:
-    result.cancelRead = fds[0]
-    result.cancelWrite = fds[1]
-    discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
-    discard fcntl(result.cancelWrite, F_SETFL, O_NONBLOCK)
+  when not defined(windows):
+    var fds: array[2, cint]
+    if posix.pipe(fds) == 0:
+      result.cancelRead = fds[0]
+      result.cancelWrite = fds[1]
+      discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
+      discard fcntl(result.cancelWrite, F_SETFL, O_NONBLOCK)
   let controller = result
   screen.forkChoices = agent[].session.forkChoices
   result.refreshFooter()
@@ -471,12 +478,13 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
 
 proc close*(controller: NimletController) =
   controller.agent[].extensionRuntime.setOnUpdate(nil)
-  if controller.cancelRead >= 0:
-    discard posix.close(controller.cancelRead)
-    controller.cancelRead = -1
-  if controller.cancelWrite >= 0:
-    discard posix.close(controller.cancelWrite)
-    controller.cancelWrite = -1
+  when not defined(windows):
+    if controller.cancelRead >= 0:
+      discard posix.close(controller.cancelRead)
+      controller.cancelRead = -1
+    if controller.cancelWrite >= 0:
+      discard posix.close(controller.cancelWrite)
+      controller.cancelWrite = -1
 
 proc busy*(controller: NimletController): bool = controller.screen.busy
 

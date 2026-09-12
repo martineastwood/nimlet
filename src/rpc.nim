@@ -1,6 +1,10 @@
 ## Long-running JSONL control protocol over stdin/stdout.
 
-import std/[asyncdispatch, json, os, posix, sequtils, strutils]
+import std/[asyncdispatch, json, os, sequtils, strutils]
+when defined(windows):
+  import std/winlean
+else:
+  import posix
 import nimgent
 import agent, config, events, hooks, session
 import ui/turn
@@ -35,9 +39,10 @@ var rpcSignalWrite = -1.cint
 
 proc handleRpcSigint() {.noconv, raises: [], gcsafe.} =
   rpcSigint = 1
-  if rpcSignalWrite >= 0:
-    var byte = '\1'
-    discard posix.write(rpcSignalWrite, byte.addr, 1)
+  when not defined(windows):
+    if rpcSignalWrite >= 0:
+      var byte = '\1'
+      discard posix.write(rpcSignalWrite, byte.addr, 1)
 
 proc send(runtime: RpcRuntime, event: JsonNode) =
   if not runtime.writeEvent.isNil:
@@ -54,15 +59,17 @@ proc responseJson(id: string, ok: bool, state = "", error = ""): JsonNode =
 
 proc signalCancel(runtime: RpcRuntime) =
   runtime.interrupted = true
-  if runtime.cancelWrite >= 0:
-    var byte = '\1'
-    discard posix.write(runtime.cancelWrite, byte.addr, 1)
+  when not defined(windows):
+    if runtime.cancelWrite >= 0:
+      var byte = '\1'
+      discard posix.write(runtime.cancelWrite, byte.addr, 1)
 
 proc drainCancel(runtime: RpcRuntime) =
-  if runtime.cancelRead < 0: return
-  var bytes: array[64, char]
-  while posix.read(runtime.cancelRead, bytes.addr, bytes.len) > 0:
-    discard
+  when not defined(windows):
+    if runtime.cancelRead < 0: return
+    var bytes: array[64, char]
+    while posix.read(runtime.cancelRead, bytes.addr, bytes.len) > 0:
+      discard
 
 proc queuedCount(runtime: RpcRuntime): int =
   runtime.steeringQueue.len + runtime.followUpQueue.len
@@ -80,11 +87,12 @@ proc newRpcRuntime*(agent: ptr Agent, writeEvent: RpcWriter = nil): RpcRuntime =
                    else: normalizeQueueMode(agent[].config.steeringMode),
     followUpMode: if agent[].config.followUpMode.len == 0: DefaultQueueMode
                   else: normalizeQueueMode(agent[].config.followUpMode))
-  var fds: array[2, cint]
-  if posix.pipe(fds) == 0:
-    result.cancelRead = fds[0]
-    result.cancelWrite = fds[1]
-    discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
+  when not defined(windows):
+    var fds: array[2, cint]
+    if posix.pipe(fds) == 0:
+      result.cancelRead = fds[0]
+      result.cancelWrite = fds[1]
+      discard fcntl(result.cancelRead, F_SETFL, O_NONBLOCK)
   let runtime = result
   var ui = consoleSink()
   ui.emit = proc (level: MsgLevel, text: string) =
@@ -157,12 +165,13 @@ proc newRpcRuntime*(agent: ptr Agent, writeEvent: RpcWriter = nil): RpcRuntime =
   runtime.ui = ui
 
 proc close*(runtime: RpcRuntime) =
-  if runtime.cancelRead >= 0:
-    discard posix.close(runtime.cancelRead)
-    runtime.cancelRead = -1
-  if runtime.cancelWrite >= 0:
-    discard posix.close(runtime.cancelWrite)
-    runtime.cancelWrite = -1
+  when not defined(windows):
+    if runtime.cancelRead >= 0:
+      discard posix.close(runtime.cancelRead)
+      runtime.cancelRead = -1
+    if runtime.cancelWrite >= 0:
+      discard posix.close(runtime.cancelWrite)
+      runtime.cancelWrite = -1
 
 proc startPrompt(runtime: RpcRuntime, id, prompt: string) =
   runtime.drainCancel()
@@ -309,6 +318,38 @@ proc pollRpc*(runtime: RpcRuntime): bool =
       runtime.startQueuedPrompt()
   not (runtime.shuttingDown and runtime.active.isNil)
 
+proc readRpcInput(input: var string): bool =
+  ## Returns true when stdin reached EOF. RPC stdin is normally a pipe, but
+  ## using the console wait path also makes this usable from a Windows host.
+  when defined(windows):
+    let handle = getStdHandle(STD_INPUT_HANDLE)
+    var mode: DWORD
+    let consoleInput = getConsoleMode(handle, addr mode) != 0
+    var ready = false
+    if consoleInput:
+      ready = waitForSingleObject(handle, 0) == WAIT_OBJECT_0
+    else:
+      var available: int32
+      if not peekNamedPipe(handle, nil, 0, nil, addr available, nil):
+        return true
+      ready = available > 0
+    if not ready: return false
+    var bytes: array[4096, char]
+    var count: int32
+    if readFile(handle, addr bytes[0], bytes.len.int32, addr count, nil) == 0:
+      return true
+    if count <= 0: return true
+    for i in 0 ..< int(count): input.add bytes[i]
+    false
+  else:
+    var ready = TPollfd(fd: STDIN_FILENO, events: POLLIN)
+    if posix.poll(ready.addr, Tnfds(1), 0) <= 0: return false
+    var bytes: array[4096, char]
+    let count = posix.read(STDIN_FILENO, bytes.addr, bytes.len)
+    if count <= 0: return true
+    for i in 0 ..< count: input.add bytes[i]
+    false
+
 proc runRpc*(agent: var Agent) =
   let runtime = newRpcRuntime(addr agent)
   defer:
@@ -325,14 +366,8 @@ proc runRpc*(agent: var Agent) =
       runtime.shuttingDown = true
       runtime.interrupted = true
       runtime.clearQueue()
-    var ready = TPollfd(fd: STDIN_FILENO, events: POLLIN)
-    if posix.poll(ready.addr, Tnfds(1), 0) > 0:
-      var bytes: array[4096, char]
-      let count = posix.read(STDIN_FILENO, bytes.addr, bytes.len)
-      if count > 0:
-        for i in 0 ..< count: input.add bytes[i]
-      else:
-        eof = true
+    if not eof:
+      eof = readRpcInput(input)
     var newline = input.find('\n')
     while newline >= 0:
       let line = input[0 ..< newline].strip(chars = {'\r'})

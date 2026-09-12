@@ -2,7 +2,10 @@
 
 import std/[os, strutils, times]
 import nimterm/[app, backend, widgets]
-import nimterm/platform_posix
+when defined(windows):
+  import nimterm/platform_windows
+else:
+  import nimterm/platform_posix
 import ../agent
 import nimterm_controller
 import nimterm_screen
@@ -23,7 +26,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "",
   let screen = newNimtermScreen(body, agent.config.workspace,
     agent.config.sessionDir, modelPickerFrom(agent), agent.session.id,
     agent.config.keybindings)
-  let backend = newPosixBackend(fullscreen = fullscreen)
+  let backend = newPlatformBackend(fullscreen = fullscreen)
   var app = newApp(backend, screen)
   ## Keep streamed output bounded to a smooth 60 FPS while keyboard events
   ## bypass this budget in App.step.

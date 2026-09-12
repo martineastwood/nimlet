@@ -1,9 +1,9 @@
 ## bash tool — run a shell command in the workspace.
 
 import std/[asyncdispatch, json, os, osproc, strformat, times]
-when not defined(linux):
+when not defined(windows) and not defined(linux):
   import std/posix
-import tool, nimgent, ../childproc
+import tool, nimgent, ../childproc, ../shell
 
 const
   DefaultTimeout = 120
@@ -36,14 +36,10 @@ proc makeBashTool*(workDir: string,
     let stamp = $getCurrentProcessId() & "-" & $int(start * 1_000_000)
     let stdoutPath = getTempDir() / ("nimlet-" & stamp & ".out")
     let stderrPath = getTempDir() / ("nimlet-" & stamp & ".err")
-    let redirections = " >" & quoteShell(stdoutPath) &
-      " 2>" & quoteShell(stderrPath)
-    let shell = getEnv("SHELL", "/bin/sh")
-    # set +m: keep `&` children in this process group (zsh job control
-    # otherwise orphans them from killpg).
-    let shellArgs = @["-c", "set +m; (" & command & ")" & redirections]
-    var spawnCmd = shell
-    var spawnArgs = shellArgs
+    let shell = defaultShell()
+    let commandLine = shell.redirectedCommand(command, stdoutPath, stderrPath)
+    var spawnCmd = shell.executable
+    var spawnArgs = shell.commandLine(commandLine)
     var spawnOpts = {poUsePath}
     when defined(linux):
       # Nim's fork path ignores poDaemon (SETPGROUP), and parent setpgid
@@ -51,16 +47,17 @@ proc makeBashTool*(workDir: string,
       # session leader before the shell runs so kill(-pid) reaches
       # grandchildren.
       spawnCmd = "setsid"
-      spawnArgs = @[shell] & shellArgs
+      spawnArgs = @[shell.executable] & spawnArgs
     else:
-      spawnOpts.incl poDaemon
+      when not defined(windows):
+        spawnOpts.incl poDaemon
     let p = startProcess(
       command = spawnCmd,
       args = spawnArgs,
       options = spawnOpts,
       workingDir = workDir
     )
-    when not defined(linux):
+    when not defined(windows) and not defined(linux):
       let pid = Pid(p.processID)
       discard setpgid(pid, pid)
 

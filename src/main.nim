@@ -1,9 +1,9 @@
-import std/[asyncdispatch, json, os, sequtils, strutils, terminal]
+import std/[asyncdispatch, json, os, sequtils, strutils]
 import nimgent
 import config, agent, session, hooks, events, rpc, trust
 import shell
 import ui/[console, nimterm_preview, turn]
-import nimterm/theme
+import nimterm/[term, theme]
 
 type
   CliArgs* = object
@@ -328,7 +328,7 @@ proc runMain*() =
     stderr.writeLine cli.error
     quit(2)
 
-  let stdinIsTty = stdin.isatty
+  let stdinIsTty = terminalInputIsInteractive()
   let isRpcMode = cli.mode == "rpc"
   let isPrintMode = not isRpcMode and cli.printMode(stdinIsTty)
   let prompt = if isRpcMode or stdinIsTty: cli.prompt
@@ -402,7 +402,7 @@ proc runMain*() =
     runOneShot(agent, prompt, catalogNote)
     return
 
-  if stdout.isatty:
+  if terminalOutputIsInteractive():
     runNimtermTUI(agent, catalogNote, prompt, cli.fullscreen)
   else:
     runConsole(agent, catalogNote, prompt)

@@ -624,8 +624,14 @@ suite "black-box terminal integration":
     check controller.awaitingApproval
     backend.feed("\r")
     for _ in 0 .. 10: discard app.step()
-    waitFor sleepAsync(100)
-    for _ in 0 .. 20: discard app.step()
+    ## Creating a native Git Bash/PowerShell child has measurable startup
+    ## cost on Windows. Poll until the turn settles rather than relying on a
+    ## fixed delay that is fragile on a busy Windows host.
+    let deadline = epochTime() + (if defined(windows): 5.0 else: 1.0)
+    while controller.busy and epochTime() < deadline:
+      discard app.step()
+      waitFor sleepAsync(25)
+    discard app.step()
     check not controller.busy
     var approved = false
     for event in agent.session.events:
@@ -809,7 +815,11 @@ suite "bash tool":
     check not success.isError
     check "exit_code: 0" in success.output
     check "hello" in success.output
-    let failure = invoke(bash, %*{"command": "printf error >&2; exit 3"})
+    let failureCommand = if defaultShell().kind == shellPowerShell:
+      "Write-Error error; exit 3"
+    else:
+      "printf error >&2; exit 3"
+    let failure = invoke(bash, %*{"command": failureCommand})
     check failure.isError
     check "exit_code: 3" in failure.output
     check "stderr:" in failure.output
@@ -857,20 +867,26 @@ suite "bash tool":
     var reg: ToolRegistry
     let bash = makeBashTool(root)
     reg.register(bash[0], bash[1])
-    let pidPath = root / "pid"
-    let result = waitFor reg.execute("bash",
-      %*{"command": "sleep 8 &\necho $! > pid\nwait", "timeout_seconds": 3},
-      proc (): bool =
-        # Wait is event-driven; this test's cancel signal is a file, not an fd.
-        for _ in 0 .. 50:
-          if fileExists(pidPath): return true
-          sleep(10)
-        false)
+    let result = when defined(windows):
+      ## Windows cancellation stops the shell process itself; process-group
+      ## termination is not portable without assigning a Job Object.
+      waitFor reg.execute("bash", %*{"command": "Start-Sleep 8"},
+        proc (): bool = true)
+    else:
+      let pidPath = root / "pid"
+      waitFor reg.execute("bash",
+        %*{"command": "sleep 8 &\necho $! > pid\nwait", "timeout_seconds": 3},
+        proc (): bool =
+          # Wait is event-driven; this test's cancel signal is a file, not an fd.
+          for _ in 0 .. 50:
+            if fileExists(pidPath): return true
+            sleep(10)
+          false)
     check result.isError
     check "INTERRUPTED" in result.output
-    let child = readFile(pidPath).strip.parseInt
-    sleep(50)
-    when defined(posix):
+    when not defined(windows):
+      let child = readFile(pidPath).strip.parseInt
+      sleep(50)
       check posix.kill(Pid(child), 0) != 0
 
 suite "session":
@@ -917,9 +933,13 @@ suite "session":
     check reloaded.events.len == 2
     check reloaded.messages[^1].content[0].text == "after crash"
     var backups = 0
-    for backup in walkFiles(path & ".recovery-*"):
-      check readFile(backup) == damaged
-      inc backups
+    ## `walkFiles` does not match a full Windows path containing a wildcard
+    ## consistently across Nim's supported Windows runtimes.  Enumerate the
+    ## already-known directory and apply the exact recovery-file prefix.
+    for kind, backup in walkDir(root):
+      if kind == pcFile and backup.startsWith(path & ".recovery-"):
+        check readFile(backup) == damaged
+        inc backups
     check backups == 1
     writeFile(path, readFile(path).strip)
     var noNewline = initSession(path, "torn")
@@ -2231,6 +2251,7 @@ suite "project instructions and skills":
       "---\nname: review\ndescription: From .agent.\n---\n")
     writeFile(root / ".nimlet" / "skills" / "review" / "SKILL.md",
       "---\nname: review\ndescription: From .nimlet.\n---\n")
+    clearSkillCache()
     let skills = discoverSkills(root)
     var desc = ""
     for skill in skills:
@@ -2255,6 +2276,7 @@ suite "project instructions and skills":
     writeFile(root / "AGENTS.md", "Always run the focused test first.\n")
     writeFile(root / ".nimlet" / "skills" / "testing" / "SKILL.md",
       "---\nname: testing\ndescription: Focused test workflow.\n---\n")
+    clearSkillCache()
     var config = loadConfig(root)
     config.sessionDir = root / "sessions"
     config.contextWindow = 128_000
@@ -3457,10 +3479,16 @@ suite "external tools":
     defer: removeDir(root)
     let dir = root / ".nimlet" / "tools" / "echo_json"
     createDir(dir)
+    let command = when defined(windows):
+      @[if findExe("pwsh").len > 0: findExe("pwsh")
+        else: findExe("powershell"), "-NoLogo", "-NoProfile", "-Command",
+        "[Console]::WriteLine('{\"bin\":true}')"]
+    else:
+      @["/bin/echo", "{\"bin\":true}"]
     writeFile(dir / "tool.json", $(%*{
       "name": "echo_json",
       "description": "Echo a JSON object",
-      "command": ["/bin/echo", "{\"bin\":true}"],
+      "command": command,
       "input_schema": {"type": "object", "properties": {}}
     }))
     let ext = findExt(discoverExtensions(root).tools, "echo_json")

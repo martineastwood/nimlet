@@ -4,11 +4,12 @@
 ## runExtension is public so lifecycle hooks can reuse the same protocol later.
 
 import std/[algorithm, asyncdispatch, json, os, osproc, strformat, strutils, times]
-when not defined(linux):
+when not defined(windows) and not defined(linux):
   import posix
 import config
 import nimgent
 import childproc
+import shell
 import tools/tool
 
 const
@@ -112,6 +113,24 @@ proc isBuiltinName*(name: string): bool =
       return true
   false
 
+proc extensionShell(spawnCmd: string): ShellSpec =
+  result = defaultShell()
+  when defined(windows):
+    ## The historical manifest format commonly points at a shebang script
+    ## without a `.sh` suffix (for example `./run`). If Bash is installed,
+    ## honor that shebang even when nimlet itself is running from PowerShell.
+    try:
+      let lines = readFile(spawnCmd).splitLines
+      if lines.len > 0:
+        let firstLine = lines[0].strip.toLowerAscii
+        if firstLine.startsWith("#!") and
+            ("/sh" in firstLine or "bash" in firstLine):
+          let bash = findExe("bash")
+          if bash.len > 0:
+            result = ShellSpec(kind: shellBash, executable: bash)
+    except CatchableError:
+      discard
+
 proc runExtension*(ext: ExtensionTool, input: JsonNode, workspace: string,
                    maxOutputBytes = 100_000,
                    shouldCancel: CancelCheck = nil): Future[ToolResult] {.async.} =
@@ -135,20 +154,16 @@ proc runExtension*(ext: ExtensionTool, input: JsonNode, workspace: string,
   writeFile(stdinPath, $payload)
 
   # Redirect via the shell so stdout/stderr cannot fill a pipe and deadlock.
-  var argvQuoted = quoteShell(spawnCmd)
-  for a in spawnArgs:
-    argvQuoted.add " "
-    argvQuoted.add quoteShell(a)
-  let shell = getEnv("SHELL", "/bin/sh")
-  let script = argvQuoted & " <" & quoteShell(stdinPath) &
-    " >" & quoteShell(stdoutPath) & " 2>" & quoteShell(stderrPath)
-  let shellArgs = @["-c", script]
-  var spawnShell = shell
-  var spawnShellArgs = shellArgs
+  let shell = extensionShell(spawnCmd)
+  let argvQuoted = shell.commandInvocation(spawnCmd, spawnArgs)
+  let script = shell.redirectedCommand(argvQuoted, stdoutPath, stderrPath,
+    stdinPath)
+  var spawnShell = shell.executable
+  var spawnShellArgs = shell.commandLine(script)
   var spawnOpts = {poUsePath}
   when defined(linux):
     spawnShell = "setsid"
-    spawnShellArgs = @[shell] & shellArgs
+    spawnShellArgs = @[shell.executable] & spawnShellArgs
   else:
     spawnOpts.incl poDaemon
 
@@ -157,7 +172,7 @@ proc runExtension*(ext: ExtensionTool, input: JsonNode, workspace: string,
     args = spawnShellArgs,
     options = spawnOpts,
     workingDir = workspace)
-  when not defined(linux):
+  when not defined(windows) and not defined(linux):
     let pid = Pid(p.processID)
     discard setpgid(pid, pid)
 

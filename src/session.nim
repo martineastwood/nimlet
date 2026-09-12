@@ -336,6 +336,12 @@ proc append*(session: var Session, event: SessionEvent) =
     let backup = session.path & ".recovery-" & $int(epochTime() * 1_000_000)
     writeDurable(backup, session.damagedFile)
     writeDurable(backup & ".tmp", session.validPrefix)
+    when defined(windows):
+      ## MoveFileEx(REPLACE_EXISTING) can still return Access Denied when the
+      ## destination was opened by a Windows reader with restrictive sharing.
+      ## The damaged bytes are already preserved in `backup`, so remove the
+      ## stale destination before installing the validated prefix.
+      if fileExists(session.path): removeFile(session.path)
     moveFile(backup & ".tmp", session.path)
     session.needsNewline = session.validPrefix.len > 0 and
       not session.validPrefix.endsWith("\n")

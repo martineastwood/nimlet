@@ -18,7 +18,23 @@ resolves both via `nim.cfg`; with Docker Compose, `../nimgent` is mounted at
 `/nimgent`. The `nimgent` package requirement resolves installed or published
 versions; `nimterm` is currently developed from this sibling checkout.
 
-Windows is not supported natively. Use [WSL](https://learn.microsoft.com/windows/wsl) and build inside the Linux environment.
+Native Windows builds are supported. From PowerShell:
+
+```powershell
+nimble build
+.\nimlet.exe
+```
+
+From Git Bash, the same binary can be built and started with `nimble build` and
+`./nimlet.exe`. The Windows nimterm backend uses the native console API when
+available and ANSI/VT byte streams for Windows Terminal, ConPTY, and MSYS/Git
+Bash. Windows Terminal or another modern VT-capable terminal is recommended.
+
+Shell tools follow the current environment: Git Bash uses Bash, while
+PowerShell uses `pwsh` (or `powershell.exe` when `pwsh` is unavailable). Set
+`NIMLET_SHELL=bash`, `NIMLET_SHELL=pwsh`, or `NIMLET_SHELL=cmd.exe` to override
+that choice. POSIX shell scripts used as persistent extensions require Bash on
+Windows; PowerShell scripts and native `.exe` extensions are also supported.
 
 By default, set the provider's API key before starting the agent:
 `OPENROUTER_API_KEY` for OpenRouter, `OPENAI_API_KEY` for OpenAI,
@@ -137,7 +153,9 @@ through unchanged. Other settings remain intact. `/thinking` and `/model` saves
 preserve provider options. Connection probes and compaction keep their existing
 request settings.
 
-Run `./nimlet` from the workspace you want the agent to modify.
+Run the built executable from the workspace you want the agent to modify:
+`./nimlet` on POSIX, `./nimlet.exe` from Git Bash, or `.\nimlet.exe` from
+PowerShell. The command-line examples below use the POSIX spelling.
 
 While a turn is running, Enter queues a steering message for delivery after the
 current assistant tool batch, before the next model call. Alt+Enter queues a

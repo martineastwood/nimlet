@@ -1,13 +1,18 @@
 ## Persistent, language-neutral extensions over JSONL stdin/stdout.
 
-import std/[asyncdispatch, json, locks, os, osproc, posix, streams, strutils,
+import std/[asyncdispatch, json, locks, os, osproc, streams, strutils,
   tables, times]
+when defined(windows):
+  import std/winlean
+else:
+  import posix
 import config
 import extensions
 import trust
 import nimgent
 import tools/tool
 import hooks
+import shell
 
 type
   ExtensionQuestionProc* = proc(prompt: string,
@@ -169,10 +174,73 @@ proc captureActions(runtime: ExtensionRuntime, extension: int,
     runtime.entries.add ExtensionEntry(extension: namespace, data: entry)
 
 proc receive(process: Process, timeoutMs = 30_000): JsonNode =
-  var descriptor = TPollfd(fd: process.outputHandle.cint, events: POLLIN)
-  if poll(descriptor.addr, 1, timeoutMs.cint) <= 0:
-    raise newException(IOError, "extension response timed out")
-  parseJson(process.outputStream.readLine())
+  when defined(windows):
+    ## Windows has no poll(2). PeekNamedPipe lets us wait for a complete JSONL
+    ## record without turning a child response timeout into a blocked read.
+    let deadline = epochTime() + timeoutMs.float / 1000.0
+    let handle = Handle(process.outputHandle)
+    while true:
+      var available: int32
+      var readCount: int32
+      var probe: array[4096, char]
+      if peekNamedPipe(handle, addr probe[0], probe.len.int32,
+                       addr readCount, addr available, nil) and readCount > 0:
+        var hasNewline = false
+        for i in 0 ..< int(readCount):
+          if probe[i] == '\n':
+            hasNewline = true
+            break
+        if hasNewline:
+          return parseJson(process.outputStream.readLine())
+      if timeoutMs >= 0 and epochTime() >= deadline:
+        raise newException(IOError, "extension response timed out")
+      if process.peekExitCode() != -1:
+        raise newException(IOError, "extension exited before responding")
+      sleep(10)
+  else:
+    var descriptor = TPollfd(fd: process.outputHandle.cint, events: POLLIN)
+    if poll(descriptor.addr, 1, timeoutMs.cint) <= 0:
+      raise newException(IOError, "extension response timed out")
+    parseJson(process.outputStream.readLine())
+
+proc extensionLaunch(command: seq[string], dir: string):
+    tuple[executable: string, args: seq[string]] =
+  result.executable = if command[0].isAbsolute or '/' notin command[0]:
+    command[0]
+  else:
+    dir / command[0]
+  result.args = if command.len > 1: command[1 .. ^1] else: @[]
+  when defined(windows):
+    ## Windows does not execute a POSIX shebang when a script is passed to
+    ## CreateProcess.  Keep manifests portable by selecting an interpreter
+    ## for the common script extensions while leaving native executables
+    ## unchanged.
+    let suffix = result.executable.toLowerAscii
+    if suffix.endsWith(".sh"):
+      var interpreter = defaultShell()
+      if interpreter.kind notin {shellBash, shellPosix}:
+        let bash = findExe("bash")
+        if bash.len > 0:
+          interpreter = ShellSpec(kind: shellBash, executable: bash)
+      if interpreter.kind in {shellBash, shellPosix}:
+        let script = interpreter.commandInvocation(result.executable, result.args)
+        return (interpreter.executable, interpreter.commandLine(script))
+    elif suffix.endsWith(".ps1"):
+      var interpreter = defaultShell()
+      if interpreter.kind != shellPowerShell:
+        let pwsh = findExe("pwsh")
+        if pwsh.len > 0:
+          interpreter = ShellSpec(kind: shellPowerShell, executable: pwsh)
+      if interpreter.kind == shellPowerShell:
+        return (interpreter.executable,
+          @["-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+            result.executable] & result.args)
+    elif suffix.endsWith(".cmd") or suffix.endsWith(".bat"):
+      let cmd = findExe("cmd.exe")
+      if cmd.len > 0:
+        let interpreter = ShellSpec(kind: shellCmd, executable: cmd)
+        let script = interpreter.commandInvocation(result.executable, result.args)
+        return (interpreter.executable, @["/d", "/s", "/c", script])
 
 proc readMessages(args: ReaderArgs) {.thread.} =
   while true:
@@ -196,14 +264,11 @@ proc startExtensions*(workspace, sessionId: string): ExtensionRuntime =
     if not spec.ok:
       result.warnings.add "skipping " & dir & ": " & spec.err
       continue
-    let executable = if spec.command[0].isAbsolute or '/' notin spec.command[0]:
-                       spec.command[0]
-                     else:
-                       dir / spec.command[0]
-    let args = if spec.command.len > 1: spec.command[1 .. ^1] else: @[]
+    let launch = extensionLaunch(spec.command, dir)
     var process: Process
     try:
-      process = startProcess(executable, workingDir = workspace, args = args,
+      process = startProcess(launch.executable, workingDir = workspace,
+        args = launch.args,
         options = {poUsePath})
       process.send(%*{"type": "initialize", "version": 1,
         "workspace": workspace, "session_id": sessionId})

@@ -2,6 +2,7 @@
 
 import std/[os, osproc, strutils, times]
 import nimterm/term
+import shell
 
 type ExternalEditResult* = object
   ok*: bool
@@ -23,8 +24,33 @@ proc editTextExternally*(text: string): ExternalEditResult =
     if wasActive: suspendTerminal()
     var exitCode = -1
     try:
-      let process = startProcess("/bin/sh", args = @[
-        "-c", editor & " " & quoteShell(path)],
+      var shell = defaultShell()
+      when defined(windows):
+        ## VISUAL/EDITOR frequently points at a small POSIX script. Run a
+        ## shebang shell script through Bash when it is available, even from
+        ## a PowerShell-launched nimlet.
+        try:
+          let lines = readFile(editor).splitLines
+          if lines.len > 0 and lines[0].strip.toLowerAscii.startsWith("#!") and
+              ("/sh" in lines[0].toLowerAscii or
+               "bash" in lines[0].toLowerAscii):
+            let bash = findExe("bash")
+            if bash.len > 0:
+              shell = ShellSpec(kind: shellBash, executable: bash)
+        except CatchableError:
+          discard
+      let editorCommand = if shell.kind == shellBash:
+        editor.replace("\\", "/")
+      else:
+        editor
+      let editorInvocation = if fileExists(editor):
+        (if shell.kind == shellPowerShell: "& " else: "") &
+          shell.quoteArgument(editorCommand)
+      else:
+        editorCommand
+      let process = startProcess(shell.executable,
+        args = shell.commandLine(editorInvocation & " " &
+          shell.quoteArgument(path)),
         options = {poParentStreams, poUsePath})
       exitCode = process.waitForExit()
       process.close()
