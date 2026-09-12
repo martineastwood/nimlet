@@ -56,8 +56,7 @@ method needsPolling(source: NimletTurnSource): bool = not source.active.isNil
 proc newNimletTurnSource*(active: Future[bool] = nil): NimletTurnSource =
   NimletTurnSource(id: "agent-turn", active: active)
 
-proc refreshFooter(controller: NimletController,
-                   width = controller.screen.statusWidth) =
+proc refreshFooter(controller: NimletController, width = 0) =
   controller.screen.extensionWidgetLines = controller.agent[].extensionRuntime.widgetLines
   for message in controller.steeringQueue:
     controller.screen.extensionWidgetLines.add "Steering: " & message
@@ -65,7 +64,9 @@ proc refreshFooter(controller: NimletController,
     controller.screen.extensionWidgetLines.add "Follow-up: " & message
   if controller.steeringQueue.len + controller.followUpQueue.len > 0:
     controller.screen.extensionWidgetLines.add "↳ Alt+Up to edit queued messages"
-  var status = controller.agent[].statusFooter(width)
+  controller.screen.footerRight = controller.agent[].statusFooterRight()
+  let statusWidth = controller.screen.statusWidth(width)
+  var status = controller.agent[].statusFooter(statusWidth)
   let queued = controller.steeringQueue.len + controller.followUpQueue.len
   if queued > 0: status.add " · queue:" & $queued
   controller.screen.footer = controller.screen.statusLine(status)
@@ -330,7 +331,7 @@ proc handleEvent*(controller: NimletController,
     controller.resetInteraction()
     return eventHandled
   if event.kind == uiResize:
-    controller.refreshFooter(max(0, event.width - 15))
+    controller.refreshFooter(max(0, event.width))
   if controller.screen.busy and event.kind == uiKey and event.key == keyCtrlC:
     controller.requestInterrupt()
     if not controller.questionFuture.isNil and
@@ -396,7 +397,8 @@ proc handleAction*(controller: NimletController, running: var App,
 
 proc newNimletController*(screen: NimtermScreen, app: ptr App,
                            agent: ptr Agent): NimletController =
-  result = NimletController(screen: screen, app: app, agent: agent,
+  let appPtr {.cursor.} = app
+  result = NimletController(screen: screen, app: appPtr, agent: agent,
     turns: newNimletTurnSource(), cancelRead: -1, cancelWrite: -1,
     steeringQueue: @[], followUpQueue: @[])
   var fds: array[2, cint]
@@ -410,13 +412,13 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
   result.refreshFooter()
   result.ui = previewSink(result)
   agent[].extensionRuntime.setOnUpdate proc() {.gcsafe.} =
-    app[].post UiEvent(kind: uiTimer, timerId: "extensions")
+    appPtr[].post UiEvent(kind: uiTimer, timerId: "extensions")
   result.turns.onFinish = proc (keepRunning, succeeded: bool) =
     controller.finishTurn(keepRunning, succeeded)
-  app[].addSource(result.turns)
-  app[].onEvent = proc (_: var App, event: UiEvent): EventResponse =
+  appPtr[].addSource(result.turns)
+  appPtr[].onEvent = proc (_: var App, event: UiEvent): EventResponse =
     controller.handleEvent(event)
-  app[].onAction = proc (running: var App, action: UiAction) =
+  appPtr[].onAction = proc (running: var App, action: UiAction) =
     controller.handleAction(running, action)
 
 proc close*(controller: NimletController) =

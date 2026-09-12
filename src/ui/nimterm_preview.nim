@@ -36,6 +36,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
   app.render()
   if agent.session.events.len > 0:
     screen.replaySession(agent.session)
+    screen.footerRight = agent.statusFooterRight()
     screen.footer = screen.statusLine(agent.statusFooter(screen.statusWidth))
     app.invalidate()
     app.render()
@@ -51,6 +52,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "") =
       if screen.busy:
         lastSpinnerFrame = int(max(0.0, epochTime() -
           screen.spinnerStartedAt) * 12.0) mod 10
+        screen.footerRight = agent.statusFooterRight()
         screen.footer = screen.statusLine(agent.statusFooter(screen.statusWidth))
       app.invalidate()
     ## step() returns before flushing when the backend had no event. Flush here

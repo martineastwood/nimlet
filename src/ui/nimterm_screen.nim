@@ -30,6 +30,7 @@ type
     notice*: string
     noticeUntil*: float
     footer*: string
+    footerRight*: string
     extensionWidgetLines*: seq[string]
     headerSessionId: string
     headerSessionLine: int
@@ -41,7 +42,6 @@ type
     appliedThemeRevision: int
     stylesReady: bool
 const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-const statusActivityWidth = 12
 method focusable*(screen: NimtermScreen): bool = true
 
 method children*(screen: NimtermScreen): seq[Widget] =
@@ -52,19 +52,23 @@ method children*(screen: NimtermScreen): seq[Widget] =
     result.add screen.composer
 
 proc statusLine*(screen: NimtermScreen, status: string): string =
+  status
+
+proc activityLine*(screen: NimtermScreen): string =
+  if not screen.busy and screen.activity.len == 0: return ""
   let frame = int(max(0.0, epochTime() - screen.spinnerStartedAt) * 12.0) mod
     spinnerFrames.len
   let activity = if screen.activity.len > 0: screen.activity else: "Ready"
-  let prefix = if screen.busy:
+  if screen.busy:
     currentTheme.paint(currentTheme.accent, spinnerFrames[frame]) & " " & activity
   else:
     activity
-  prefix & " ".repeat(max(0, statusActivityWidth - ansiVisibleWidth(prefix))) &
-    " · " & status
 
-proc statusWidth*(screen: NimtermScreen): int =
-  if screen.area.w == 0: int.high
-  else: max(0, screen.area.w - statusActivityWidth - 3)
+proc statusWidth*(screen: NimtermScreen, width = 0): int =
+  let terminalWidth = if width > 0: width else: screen.area.w
+  if terminalWidth == 0: return int.high
+  let rightWidth = ansiVisibleWidth(screen.footerRight)
+  max(0, terminalWidth - (if rightWidth > 0: rightWidth + 3 else: 0))
 
 proc workingFooter*(screen: NimtermScreen, status: string): string =
   screen.statusLine(status)
@@ -561,13 +565,16 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
   screen.composer.paddingTop = verticalPadding
   screen.composer.paddingBottom = verticalPadding
   let footerRow = h - 1
+  let activityRows = if screen.questionWidget.isNil: 1 else: 0
   const inputRuleRows = 1
-  let maxInputRows = max(1, footerRow - headerHeight - inputRuleRows)
+  let maxInputRows = max(1, footerRow - headerHeight - activityRows - inputRuleRows)
   let inputRows = min(maxInputRows, textRows + verticalPadding * 2)
-  let inputTop = max(headerHeight, footerRow - inputRuleRows - inputRows)
+  let inputTop = max(headerHeight + activityRows,
+    footerRow - inputRuleRows - inputRows)
   let widgetRows = min(screen.extensionWidgetLines.len,
-    max(0, inputTop - headerHeight))
-  let widgetTop = inputTop - widgetRows
+    max(0, inputTop - activityRows - headerHeight))
+  let widgetTop = inputTop - activityRows - widgetRows
+  let activityTop = inputTop - activityRows
   let transcriptTop = min(headerHeight + 1, inputTop)
   var contentBottom = widgetTop
   var questionTop = inputTop
@@ -595,6 +602,8 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
         currentTheme.paint(currentTheme.muted,
           screen.extensionWidgetLines[screen.extensionWidgetLines.len - widgetRows + i]),
         defaultStyle(), w)
+    if activityRows > 0:
+      canvas.writeAnsiText(0, activityTop, screen.activityLine(), defaultStyle(), w)
     let ruleStyle = currentTheme.themedStyle(currentTheme.muted, "", {attrDim})
     canvas.writeText(0, inputTop, "─".repeat(w), ruleStyle, w)
     screen.composer.render(canvas, rect(0, inputTop + inputRuleRows, w, inputRows))
@@ -607,4 +616,10 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
         currentTheme.paint(currentTheme.accent, screen.notice)
     else:
       screen.notice = ""
-  canvas.writeAnsiText(0, footerRow, footer, defaultStyle(), w)
+  let rightWidth = ansiVisibleWidth(screen.footerRight)
+  let leftWidth = max(0, w - (if rightWidth > 0: rightWidth + 3 else: 0))
+  canvas.writeAnsiText(0, footerRow, footer, defaultStyle(), leftWidth)
+  if rightWidth > 0:
+    let rightX = max(0, w - rightWidth)
+    canvas.writeAnsiText(rightX, footerRow, screen.footerRight, defaultStyle(),
+      w - rightX)

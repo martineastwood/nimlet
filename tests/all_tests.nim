@@ -370,6 +370,8 @@ suite "black-box terminal integration":
     discard newNimletController(screen, addr app, addr agent)
     app.render()
     check "startup-model" in backend.frame.plainText
+    check backend.frame.lineText(backend.frame.size.h - 1).endsWith(
+      "openrouter/startup-model:off")
     check "#" & agent.session.id notin backend.frame.plainText
 
   test "composer is transparent with a muted rule and cyan prompt":
@@ -389,6 +391,32 @@ suite "black-box terminal integration":
     check backend.frame.getCell(0, ruleY).style.background.kind == colorDefault
     check backend.frame.getCell(2, promptY).glyph.int == ord('>')
     check backend.frame.getCell(2, promptY).style.foreground.kind != colorDefault
+
+  test "activity has its own row above the input rule":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    screen.busy = true
+    screen.activity = "Waiting for model…"
+    screen.footer = screen.statusLine("[act] · startup-model")
+    var app = termapp.newApp(backend, screen)
+    app.render()
+    let activityY = screen.composer.area.y - 2
+    let ruleY = screen.composer.area.y - 1
+    let footerY = backend.frame.size.h - 1
+    check "Waiting for model…" in backend.frame.lineText(activityY)
+    check backend.frame.lineText(ruleY).startsWith("─")
+    check backend.frame.lineText(footerY).startsWith("[act] · startup-model")
+    check "Waiting for model…" notin backend.frame.lineText(footerY)
+    let inputY = screen.composer.area.y
+    screen.activity = "Responding with a longer status message…"
+    app.render()
+    check screen.composer.area.y == inputY
+    check backend.frame.lineText(footerY).startsWith("[act] · startup-model")
 
   test "banner shortens the home directory":
     check displayPath(getHomeDir() / "repos" / "project") ==
@@ -1139,15 +1167,18 @@ suite "persistent agent sessions":
     check got.inputTokens == 10
     check got.outputTokens == 4
     check got.cacheReadTokens == 8
-    var agent = Agent(config: AgentConfig(model: "fallback", contextWindow: 100),
+    var agent = Agent(config: AgentConfig(provider: "test", model: "fallback",
+      contextWindow: 100),
                       session: reloaded)
     let status = agent.statusFooter
-    check "fallback" in status
+    check "fallback" notin status
     check "↑10" in status
     check "↓4" in status
     check "R8" in status
     check "ctx 10%" in status
-    check status.find("ctx 10%") < status.find("fallback")
+    check status.find("ctx 10%") >= 0
+    let right = stripAnsi(agent.statusFooterRight)
+    check right == "test/fallback:off"
     check "status1" notin status
     check " · " in status
     check status.find(" · ") > 0

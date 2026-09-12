@@ -87,6 +87,19 @@ proc sessionTotals*(agent: Agent): tuple[usage: Usage, cost: float, priced: bool
         result.cost += estimateUsageCost(event.provider, eventModel, event.usage)
         result.priced = true
 
+proc statusFooterRight*(agent: Agent): string =
+  let (_, storedModel, _) = agent.session.lastAssistant
+  let model = if agent.config.model.len > 0: agent.config.model else: storedModel
+  if agent.config.provider.len == 0 or model.len == 0: return ""
+  let resolvedLevel = thinkingStatus(agent.config)
+  let level = if resolvedLevel.len > 0:
+    resolvedLevel
+  else:
+    "off"
+  let t = currentTheme
+  t.paint(t.model, agent.config.provider & "/" & model) & ":" &
+    t.paint(if level == "off": t.dim else: t.warning, level)
+
 proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   ## Add fields by priority, skipping optional detail that does not fit.
   const
@@ -103,8 +116,7 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   let t = currentTheme
   if agent.yolo:
     parts.add t.paint(t.warning, "[yolo]")
-  let (found, storedModel, usage) = agent.session.lastAssistant
-  let model = if agent.config.model.len > 0: agent.config.model else: storedModel
+  let (found, _, usage) = agent.session.lastAssistant
   if found:
     let window = agent.config.effectiveContextWindow
     if window > 0:
@@ -116,8 +128,6 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
           elif pct >= 70: t.warning
           else: t.dim
         parts.add t.paint(color, "ctx " & $pct & "%")
-  if model.len > 0:
-    add t.paint(t.model, model)
   if found:
     let totals = agent.sessionTotals
     if totals.priced:
@@ -125,11 +135,6 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
     let labels = formatUsageLabels(usage)
     for label in labels:
       add column(t.paint(t.dim, label), usageWidth)
-  let level = thinkingStatus(agent.config)
-  if level == "off":
-    add t.paint(t.dim, "think:off")
-  elif level.len > 0:
-    add t.paint(t.warning, "think:" & level)
   if webSearchActive(agent.config):
     add t.paint(t.warning, "web")
   elif agent.config.webSearch:
