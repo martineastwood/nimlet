@@ -18,6 +18,7 @@ export default defineConfig({
 				{ label: 'Interactive TUI', slug: 'guides/interactive-tui' },
 				{ label: 'Plan and act mode', slug: 'guides/plan-and-act' },
 				{ label: 'Permissions', slug: 'guides/permissions' },
+				{ label: 'Security', slug: 'guides/security' },
 				{ label: 'Sessions', slug: 'guides/sessions' },
 				{ label: 'Context and compaction', slug: 'guides/context-and-compaction' },
 				{ label: 'Models and providers', slug: 'guides/models-and-providers' },
