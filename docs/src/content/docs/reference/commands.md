@@ -170,7 +170,7 @@ Argument validation is strict, and the message tells you the shape that works:
 /plan extra                  → /plan takes no arguments
 /thinking loud               → Invalid thinking level 'loud' (use none|minimal|low|medium|high|xhigh|max)
 /web maybe                   → Invalid /web value 'maybe' (use on|off)
-/provider gemini             → Unknown provider 'gemini' (use openrouter|openai|anthropic|hyper|google|codex)
+/provider gemini             → Unknown provider 'gemini' (use openrouter|openai|anthropic|hyper|google|mistral|codex)
 /model refresh               → Unknown /model option 'refresh'; did you mean /models refresh?
 /models                      → Usage: /models refresh
 /session delete              → Usage: /session delete ID

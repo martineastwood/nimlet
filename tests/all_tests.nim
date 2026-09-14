@@ -1261,6 +1261,21 @@ suite "OpenRouter provider":
     check agent.provider.name == "google"
     check agent.provider.supports(pcHostedTools)
 
+  test "mistral provider defaults to Vibe with tools":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    writeFile(root / "config.json", """{"default_provider":"mistral"}""")
+    let config = loadConfig(root, root / "config.json")
+    check config.provider == "mistral"
+    check config.model == "mistral-vibe-cli-with-tools"
+    check config.apiKeySource == "{env:MISTRAL_API_KEY}"
+    check config.endpoint == "https://api.mistral.ai/v1/chat/completions"
+    let agent = initAgent(config)
+    check agent.provider.name == "mistral"
+
 suite "persistent agent sessions":
   test "new session files can be resumed":
     let root = freshDir()
@@ -1312,7 +1327,8 @@ suite "persistent agent sessions":
     check "fallback" notin status
     check "↑10" in status
     check "↓4" in status
-    check "R8" in status
+    check "R8" notin status
+    check "CH80.0%" in status
     check "ctx 10%" in status
     check status.find("ctx 10%") >= 0
     let right = stripAnsi(agent.statusFooterRight)
@@ -1320,6 +1336,22 @@ suite "persistent agent sessions":
     check "status1" notin status
     check " · " in status
     check status.find(" · ") > 0
+
+  test "status tokens cover the whole session while ctx stays the latest call":
+    var session = initSession()
+    session.addAssistantResponse(ProviderResponse(model: "test/model",
+      usage: Usage(inputTokens: 8, outputTokens: 4, cacheReadTokens: 2,
+        cacheReported: true), content: @[text("one")]))
+    session.addAssistantResponse(ProviderResponse(model: "test/model",
+      usage: Usage(inputTokens: 6, outputTokens: 2, cacheReadTokens: 2,
+        cacheReported: true), content: @[text("two")]))
+    var agent = Agent(config: AgentConfig(provider: "test",
+      model: "test/model", contextWindow: 100), session: session)
+    let status = stripAnsi(agent.statusFooter)
+    check "↑14" in status
+    check "↓6" in status
+    check "CH28.6%" in status
+    check "ctx 6%" in status
 
   test "narrow status drops optional fields cleanly":
     var agent = Agent(mode: modeAct, yolo: true,

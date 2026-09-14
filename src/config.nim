@@ -13,7 +13,7 @@ import models_dev, compaction
 import trust
 
 const
-  WiredProviders* = ["openrouter", "openai", "anthropic", "hyper", "google", "codex"]
+  WiredProviders* = ["openrouter", "openai", "anthropic", "hyper", "google", "mistral", "codex"]
 
 type
   AgentConfig* = object
@@ -62,6 +62,8 @@ proc guessContextWindow*(model: string): int =
   if "gpt-4o" in m or "o1" in m or "o3" in m: return 200_000
   if "deepseek" in m: return 128_000
   if "qwen" in m: return 128_000
+  if "mistral" in m or "devstral" in m or "codestral" in m:
+    return 262_144
   128_000
 
 proc effectiveContextWindow*(config: AgentConfig): int =
@@ -243,6 +245,7 @@ proc defaultApiKeySource*(provider: string): string =
   of "anthropic": "{env:ANTHROPIC_API_KEY}"
   of "hyper": "{env:HYPER_API_KEY}"
   of "google": "{env:AI_STUDIO_API_KEY}"
+  of "mistral": "{env:MISTRAL_API_KEY}"
   else: ""
 
 proc defaultApiKeyEnv(provider: string): string =
@@ -257,6 +260,7 @@ proc defaultEndpoint*(provider: string): string =
   of "anthropic": "https://api.anthropic.com/v1/messages"
   of "hyper": "https://hyper.charm.land/v1/chat/completions"
   of "google": "https://generativelanguage.googleapis.com/v1beta"
+  of "mistral": "https://api.mistral.ai/v1/chat/completions"
   else: ""
 
 proc defaultProviderModel*(provider: string): string =
@@ -266,6 +270,7 @@ proc defaultProviderModel*(provider: string): string =
   of "hyper": "deepseek-v4-flash"
   of "anthropic": "claude-sonnet-4-6"
   of "google": "gemini-3.5-flash-lite"
+  of "mistral": "mistral-vibe-cli-with-tools"
   of "codex": "gpt-5"
   else: ""
 

@@ -59,7 +59,7 @@ method needsPolling(source: NimletTurnSource): bool = not source.active.isNil
 proc newNimletTurnSource*(active: Future[bool] = nil): NimletTurnSource =
   NimletTurnSource(id: "agent-turn", active: active)
 
-proc refreshFooter(controller: NimletController, width = 0) =
+proc refreshFooter*(controller: NimletController, width = 0) =
   controller.screen.extensionWidgetLines = controller.agent[].extensionRuntime.widgetLines
   for message in controller.steeringQueue:
     controller.screen.extensionWidgetLines.add "Steering: " & message

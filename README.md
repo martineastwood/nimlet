@@ -78,7 +78,7 @@ Store the provider credential in `~/.nimlet/auth.json`, or set its environment
 variable before starting the agent:
 `OPENROUTER_API_KEY` for OpenRouter, `OPENAI_API_KEY` for OpenAI,
 `ANTHROPIC_API_KEY` for Anthropic, `HYPER_API_KEY` for Hyper, or
-`AI_STUDIO_API_KEY` for Google Gemini.
+`AI_STUDIO_API_KEY` for Google Gemini, or `MISTRAL_API_KEY` for Mistral.
 
 For ChatGPT-backed Codex access, use `/login` inside nimlet. Use `/login device`
 when a browser callback is not convenient; `/auth` shows the current Codex
@@ -111,6 +111,11 @@ Native streaming, tool calls, thinking (`/thinking high`), and hosted search
 and model-supported effort levels; legacy thinking budgets are added once to
 the answer token allowance. With adaptive thinking, `agent.max_tokens` caps
 the combined thinking and answer. New shells must export the key before launching nimlet.
+
+To use Mistral Vibe models, run `/provider mistral`. The first switch selects
+`mistral-vibe-cli-with-tools`; subsequent switches restore your last model for
+that provider. Mistral uses its OpenAI-compatible Chat Completions API, so
+streaming and Nimlet's local tools work normally.
 
 `/doctor` shows the selected provider/model, endpoint (without credentials or
 query parameters), config source paths, write target, and whether each key is

@@ -57,8 +57,7 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "",
       if screen.busy:
         lastSpinnerFrame = int(max(0.0, epochTime() -
           screen.spinnerStartedAt) * 12.0) mod 10
-        screen.footerRight = agent.statusFooterRight()
-        screen.footer = screen.statusLine(agent.statusFooter(screen.statusWidth))
+        controller.refreshFooter()
       app.invalidate()
     ## step() returns before flushing when the backend had no event. Flush here
     ## so dirty status/footer changes are not held until the next keypress.

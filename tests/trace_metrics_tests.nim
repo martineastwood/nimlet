@@ -76,7 +76,6 @@ suite "nimlet trace metrics":
     check agent.traceMetrics.steps == 1
     check agent.traceMetrics.usage.inputTokens == 11
     check agent.traceMetrics.usage.outputTokens == 3
-    check "turn " in agent.statusFooter
     var output = ""
     ui.emit = proc (level: MsgLevel, value: string) = output.add value
     check agent.processInput("/stats", ui)

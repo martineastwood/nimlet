@@ -63,12 +63,6 @@ proc hasData*(metrics: TraceMetrics): bool =
   not metrics.isNil and (metrics.steps > 0 or metrics.modelCalls > 0 or
     metrics.toolCalls > 0 or metrics.failed or metrics.cancelled)
 
-proc elapsedMs*(metrics: TraceMetrics): int =
-  if metrics.isNil or metrics.startedNs == 0: return 0
-  let ended = if metrics.active: nowNs() else: metrics.endedNs
-  if ended <= metrics.startedNs: return 0
-  int((ended - metrics.startedNs) div 1_000_000)
-
 proc intAttribute(span: TraceSpan, key: string): int =
   if span.isNil or span.attributes.isNil or span.attributes.kind != JObject or
       key notin span.attributes:

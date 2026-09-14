@@ -10,7 +10,7 @@ import images
 import extensions, hooks
 import extension_runtime
 import nimgent
-import nimgent/providers/[anthropic, google, openai]
+import nimgent/providers/[anthropic, google, mistral, openai]
 import tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool, git_tool]
 import tools/ask_user_tool
 import nimterm/widgets/question
@@ -21,7 +21,7 @@ import trace_metrics
 import codex_app_server
 
 const baseSystemPrompt = """
-You are a coding agent working with the user in their workspace.
+You are Nimlet, a coding agent working with the user in their workspace.
 Help them understand, diagnose, and change code according to their request.
 
 Tool availability is request-scoped. Call only tools listed for the current request;
@@ -110,9 +110,7 @@ proc statusFooterRight*(agent: Agent): string =
 
 proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   ## Add fields by priority, skipping optional detail that does not fit.
-  const
-    modeWidth = 6
-    usageWidth = 8
+  const modeWidth = 6
   proc column(text: string, width: int): string =
     text & " ".repeat(max(0, width - ansiVisibleWidth(text)))
   var parts: seq[string] = @[]
@@ -140,15 +138,10 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
     let totals = agent.sessionTotals
     if totals.priced:
       add t.paint(t.dim, formatUsd(totals.cost))
-    let labels = formatUsageLabels(usage)
-    for label in labels:
-      add column(t.paint(t.dim, label), usageWidth)
+    ## Session-wide tokens; cache-read (`R…`) duplicates the hit rate.
+    for label in formatUsageLabels(totals.usage):
+      if not label.startsWith("R"): add t.paint(t.dim, label)
   if agent.traceMetrics.hasData:
-    let elapsed = if agent.traceMetrics.active:
-      agent.traceMetrics.elapsedMs
-    else:
-      agent.traceMetrics.turnDurationMs
-    add t.paint(t.dim, "turn " & $elapsed & "ms")
     if agent.traceMetrics.retries > 0:
       add t.paint(t.warning, "retry:" & $agent.traceMetrics.retries)
     if agent.traceMetrics.toolCalls > 0:
@@ -210,6 +203,9 @@ proc attachProvider(agent: var Agent) =
       agent.config.endpoint, agent.config.requestTimeout)
   of "google":
     agent.provider = google(agent.config.apiKey,
+      agent.config.endpoint, agent.config.requestTimeout)
+  of "mistral":
+    agent.provider = mistral(agent.config.apiKey,
       agent.config.endpoint, agent.config.requestTimeout)
   of "codex":
     agent.provider = newCodexProvider(agent.config.workspace)
