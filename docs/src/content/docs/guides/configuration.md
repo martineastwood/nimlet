@@ -50,9 +50,11 @@ Credentials live in `~/.nimlet/auth.json`, outside project configuration:
 
 The entry is keyed by provider and uses `type: "api_key"`. If an entry is absent,
 the per-provider environment variable is used instead:
-`AI_STUDIO_API_KEY`, `ANTHROPIC_API_KEY`, `HYPER_API_KEY`, `MISTRAL_API_KEY`,
+`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `HYPER_API_KEY`, `MISTRAL_API_KEY`,
 `OPENCODE_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`. Exporting the
-variable is enough; no configuration needed.
+variable is enough; no configuration needed. For the Gemini API,
+`GOOGLE_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` work too — nimlet takes the
+first of the three that is set.
 
 `--api-key` is an in-memory override for one process. `/doctor` reports whether
 the credential comes from `auth.json` or the environment, never the value.
@@ -187,7 +189,7 @@ Config sources (later overrides earlier):
 Config write target: /Users/you/.nimlet/config.json
 Auth file: /Users/you/.nimlet/auth.json (exists)
 anthropic: env ANTHROPIC_API_KEY set
-google: env AI_STUDIO_API_KEY missing
+google: env GEMINI_API_KEY missing
 hyper: env HYPER_API_KEY missing
 openai: env OPENAI_API_KEY missing
 opencode: env OPENCODE_API_KEY set
@@ -238,7 +240,7 @@ endpoint, or a model id is the suspect.
 
 | Variable | Effect |
 | --- | --- |
-| `AI_STUDIO_API_KEY`, `ANTHROPIC_API_KEY`, `HYPER_API_KEY`, `MISTRAL_API_KEY`, `OPENCODE_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Credentials when no auth entry is present |
+| `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (or `GOOGLE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`), `HYPER_API_KEY`, `MISTRAL_API_KEY`, `OPENCODE_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | Credentials when no auth entry is present |
 | `NIMLET_THINKING` | Overrides `agent.thinking` for this run |
 | `NIMLET_SHELL` | Forces the shell used by `bash` and shell shortcuts (`bash`, `pwsh`, `cmd.exe`, or a POSIX-compatible path) |
 | `VISUAL`, `EDITOR` | The editor `Ctrl-G` opens the composer in: `VISUAL` first, then `EDITOR`, falling back to `nano` |

@@ -1405,13 +1405,47 @@ suite "OpenRouter provider":
     var config = loadConfig(root, root / "config.json")
     check config.provider == "google"
     check config.model == "gemini-3.5-flash-lite"
-    check config.apiKeySource == "{env:AI_STUDIO_API_KEY}"
+    check config.apiKeySource == "{env:GEMINI_API_KEY}"
     check config.endpoint == "https://generativelanguage.googleapis.com/v1beta"
     config.thinking = "high"
     check providerOptions(config)["reasoning_effort"].getStr == "high"
     let agent = initAgent(config)
     check agent.provider.name == "google"
     check agent.provider.supports(pcHostedTools)
+
+  test "the Gemini API key answers to Google's own variable names":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    writeFile(root / "config.json", """{"default_provider":"google"}""")
+    var config = loadConfig(root, root / "config.json")
+    check apiKeyEnvCandidates("google") == @["GEMINI_API_KEY", "GOOGLE_API_KEY",
+      "GOOGLE_GENERATIVE_AI_API_KEY"]
+    check defaultApiKeyEnv("google") == "GEMINI_API_KEY"
+    ## Clear the aliases so this test, and the rest of the suite, see a known
+    ## environment; the original values are restored on the way out.
+    var saved: seq[(string, bool, string)]
+    for name in apiKeyEnvCandidates("google"):
+      saved.add (name, existsEnv(name), getEnv(name))
+      delEnv(name)
+    defer:
+      for (name, had, value) in saved:
+        if had: putEnv(name, value)
+        else: delEnv(name)
+    ## Nothing exported: no key, and `/doctor` names the preferred variable.
+    check config.apiKey.len == 0
+    check config.apiKeyDescription == "env GEMINI_API_KEY"
+    check "google: env GEMINI_API_KEY missing" in doctorReport(config)
+    ## Any of the aliases works, and `/doctor` reports the one that answered.
+    for name in apiKeyEnvCandidates("google"):
+      putEnv(name, "test-key")
+      check config.apiKey == "test-key"
+      check apiKeyEnv("google") == name
+      check config.apiKeyDescription == "env " & name
+      check ("google: env " & name & " set") in doctorReport(config)
+      delEnv(name)
 
   test "mistral provider defaults to Vibe with tools":
     let root = freshDir()

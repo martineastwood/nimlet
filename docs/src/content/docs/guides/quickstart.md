@@ -11,7 +11,7 @@ This page is a stub. Content is planned but not written yet.
 
 - Build from source (`nimble build`) and the sibling-package resolution note
 - Setting a provider API key (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
-  `ANTHROPIC_API_KEY`, `HYPER_API_KEY`, `AI_STUDIO_API_KEY`)
+  `ANTHROPIC_API_KEY`, `HYPER_API_KEY`, `GEMINI_API_KEY`)
 - Running `./nimlet` from the workspace you want the agent to modify
 - The first interactive prompt, and what the footer shows
 - One-shot turns: `./nimlet fix the failing parser test`

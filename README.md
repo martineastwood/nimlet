@@ -78,8 +78,9 @@ Store the provider credential in `~/.nimlet/auth.json`, or set its environment
 variable before starting the agent:
 `OPENROUTER_API_KEY` for OpenRouter, `OPENAI_API_KEY` for OpenAI,
 `ANTHROPIC_API_KEY` for Anthropic, `HYPER_API_KEY` for Hyper,
-`MISTRAL_API_KEY` for Mistral, `AI_STUDIO_API_KEY` for Google Gemini, or
-`OPENCODE_API_KEY` for OpenCode Go and OpenCode Zen.
+`MISTRAL_API_KEY` for Mistral, `GEMINI_API_KEY` for the Gemini API (Google AI
+Studio; `GOOGLE_API_KEY` works too), or `OPENCODE_API_KEY` for OpenCode Go and
+OpenCode Zen.
 
 For ChatGPT-backed Codex access, use `/login` inside nimlet. Use `/login device`
 when a browser callback is not convenient; `/auth` shows the current Codex

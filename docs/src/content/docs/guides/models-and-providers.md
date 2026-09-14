@@ -13,13 +13,21 @@ config, your sessions, your instructions — stays the same when you switch.
 | --- | --- | --- | --- |
 | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` |
 | `codex` | — | — | — |
-| `google` | `gemini-3.5-flash-lite` | `AI_STUDIO_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
+| `google` | `gemini-3.5-flash-lite` | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
 | `hyper` | `deepseek-v4-flash` | `HYPER_API_KEY` | `https://hyper.charm.land/v1/chat/completions` |
 | `mistral` | — | — | — |
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` |
 | `opencode` | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/go/v1/chat/completions` |
 | `opencodezen` | `deepseek-v4-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/v1/chat/completions` |
 | `openrouter` | `deepseek/deepseek-v4-flash-0731` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1/chat/completions` |
+
+`google` is the Gemini API — the key-based service you get from Google AI Studio
+(`generativelanguage.googleapis.com`). It is not Vertex AI, which is a different
+host, a different path (`projects/<project>/locations/<location>/…`), and
+different auth (a service account, not an API key); supporting it would be a
+provider of its own. The env var is `GEMINI_API_KEY`, and `GOOGLE_API_KEY` and
+`GOOGLE_GENERATIVE_AI_API_KEY` are accepted as well, so whichever one you already
+export works.
 
 `opencode` is the paid OpenCode Go subscription, `opencodezen` the pay-per-use
 OpenCode Zen catalog. Both are signed with the same `OPENCODE_API_KEY` — the Go
