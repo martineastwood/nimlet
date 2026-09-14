@@ -198,7 +198,7 @@ proc printTrustPrompt(resources: seq[string]) =
 proc runOneShot(agent: var Agent, prompt: string, catalogNote = "") =
   ## Run a single turn from a CLI prompt, then exit.
   printStartupBanner(agent, catalogNote)
-  let ui = consoleSink()
+  let ui = consoleSink(traced = true)
   defer: waitFor (addr agent).fireSessionHooks(heSessionEnd)
   discard agent.processInput(prompt, ui)
 
@@ -206,7 +206,7 @@ proc runPrint*(agent: var Agent, prompt: string,
                writeResponse: proc (text: string) {.closure.} = nil,
                writeDiagnostic: proc (text: string) {.closure.} = nil): bool =
   var failed = false
-  var ui = consoleSink()
+  var ui = consoleSink(traced = true)
   ui.emit = proc (level: MsgLevel, text: string) =
     if level == mlError: failed = true
     if level in {mlWarn, mlError}:
@@ -239,7 +239,7 @@ proc runJson*(agent: var Agent, prompt: string,
       stdout.flushFile()
   var turnId = ""
   send sessionEventJson("session_start", activeSessionId)
-  var ui = consoleSink()
+  var ui = consoleSink(traced = true)
   ui.emit = proc (level: MsgLevel, text: string) =
     if level == mlError:
       failed = true
@@ -268,7 +268,7 @@ proc runConsole(agent: var Agent, catalogNote = "", initialPrompt = "") =
   printStartupBanner(agent, catalogNote)
   echo currentTheme.paint(currentTheme.dim, "Type /help for commands and shortcuts.")
 
-  let ui = consoleSink()
+  let ui = consoleSink(traced = true)
   defer: waitFor (addr agent).fireSessionHooks(heSessionEnd)
   if initialPrompt.len > 0:
     discard agent.processInput(initialPrompt, ui)

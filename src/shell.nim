@@ -145,7 +145,7 @@ proc redirectedCommand*(spec: ShellSpec, command, stdoutPath,
       " <" & shellQuote(spec, stdinPath)
     else:
       ""
-    command & stdinRedirect & stdoutRedirect & stderrRedirect
+    "(" & command & stdinRedirect & ")" & stdoutRedirect & stderrRedirect
 
 type ShellResult* = object
   output*: string

@@ -12,6 +12,7 @@ requires "nimterm >= 0.1.0"
 
 task test, "Run the test suite":
   exec "nim c -r --hints:off --threads:on --mm:atomicArc tests/all_tests.nim"
+  exec "nim c -r --hints:off --threads:on --mm:atomicArc tests/trace_metrics_tests.nim"
 
 task release, "Build release binary":
   exec "mkdir -p build && nim c -d:release --threads:on --mm:atomicArc -o:build/nimlet src/nimlet.nim"

@@ -142,8 +142,8 @@ proc newRpcRuntime*(agent: ptr Agent, writeEvent: RpcWriter = nil): RpcRuntime =
         runtime.queuedCount, item.requestId, "follow_up")
   ui.showSession = proc (session: Session) =
     runtime.send sessionEventJson("session_start", session.id)
-  ui.generate = proc (provider: Provider,
-                      request: ProviderRequest): Future[ProviderResponse] {.async.} =
+  proc generateImpl(provider: Provider, request: ProviderRequest,
+                    trace: TraceSink): Future[ProviderResponse] {.async.} =
     var liveRequest = request
     liveRequest.wakeFd = runtime.cancelRead
     return await streamTextAsync(provider, liveRequest,
@@ -161,7 +161,14 @@ proc newRpcRuntime*(agent: ptr Agent, writeEvent: RpcWriter = nil): RpcRuntime =
             model: request.model))
         else:
           discard
-        not runtime.interrupted)
+        not runtime.interrupted,
+      callbacks = RunCallbacks(trace: trace))
+  ui.generate = proc (provider: Provider,
+                      request: ProviderRequest): Future[ProviderResponse] =
+    generateImpl(provider, request, nil)
+  ui.generateTraced = proc (provider: Provider, request: ProviderRequest,
+                            trace: TraceSink): Future[ProviderResponse] =
+    generateImpl(provider, request, trace)
   runtime.ui = ui
 
 proc close*(runtime: RpcRuntime) =

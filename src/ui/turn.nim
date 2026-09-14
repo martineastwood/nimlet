@@ -39,10 +39,13 @@ type
     copyText*: proc (text: string) {.closure.}
     generate*: proc (provider: Provider,
                      request: ProviderRequest): Future[ProviderResponse] {.closure.}
+    ## Optional traced variant used by Nimlet's per-turn metrics collector.
+    generateTraced*: proc (provider: Provider, request: ProviderRequest,
+                           trace: TraceSink): Future[ProviderResponse] {.closure.}
 
 proc noop() = discard
 
-proc consoleSink*(): TurnSink =
+proc consoleSink*(traced = false): TurnSink =
   var lastCall: ContentBlock
   proc emit(level: MsgLevel, text: string) =
     let t = currentTheme
@@ -60,7 +63,7 @@ proc consoleSink*(): TurnSink =
     else:
       echo "Resumed session: " & session.id
       echo "Events: " & $session.events.len
-  TurnSink(
+  result = TurnSink(
     emit: emit,
     render: noop,
     onChange: noop,
@@ -80,3 +83,7 @@ proc consoleSink*(): TurnSink =
                     request: ProviderRequest): Future[ProviderResponse] =
       generateTextAsync(provider, request)
   )
+  if traced:
+    result.generateTraced = proc (provider: Provider, request: ProviderRequest,
+                                  trace: TraceSink): Future[ProviderResponse] =
+      generateTextAsync(provider, request, callbacks = RunCallbacks(trace: trace))

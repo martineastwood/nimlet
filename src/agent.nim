@@ -17,6 +17,7 @@ import nimterm/widgets/question
 import nimterm/markdown
 import ui/turn
 import permissions
+import trace_metrics
 
 const baseSystemPrompt = """
 You are a coding agent working with the user in their workspace.
@@ -79,6 +80,7 @@ type
     ## Startup warnings from extension discovery (invalid manifests, collisions).
     extensionWarnings*: seq[string]
     extensionRuntime*: ExtensionRuntime
+    traceMetrics*: TraceMetrics
     loadedInstructionPaths: seq[string]
 
 proc sessionTotals*(agent: Agent): tuple[usage: Usage, cost: float, priced: bool] =
@@ -139,6 +141,16 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
     let labels = formatUsageLabels(usage)
     for label in labels:
       add column(t.paint(t.dim, label), usageWidth)
+  if agent.traceMetrics.hasData:
+    let elapsed = if agent.traceMetrics.active:
+      agent.traceMetrics.elapsedMs
+    else:
+      agent.traceMetrics.turnDurationMs
+    add t.paint(t.dim, "turn " & $elapsed & "ms")
+    if agent.traceMetrics.retries > 0:
+      add t.paint(t.warning, "retry:" & $agent.traceMetrics.retries)
+    if agent.traceMetrics.toolCalls > 0:
+      add t.paint(t.dim, "tools:" & $agent.traceMetrics.toolCalls)
   if webSearchActive(agent.config):
     add t.paint(t.warning, "web")
   elif agent.config.webSearch:
@@ -166,6 +178,16 @@ proc statsReport(agent: Agent): string =
   let totals = agent.sessionTotals
   result.add "\nSession: " & formatUsageLabels(totals.usage).join("  ")
   if totals.priced: result.add "\nSession cost: " & formatUsd(totals.cost)
+  if agent.traceMetrics.hasData:
+    let turnUsage = formatUsageLabels(agent.traceMetrics.usage)
+    if turnUsage.len > 0:
+      result.add "\nTurn usage: " & turnUsage.join("  ")
+    result.add "\nTurn: " & $agent.traceMetrics.turnDurationMs & " ms" &
+      "  model " & $agent.traceMetrics.modelDurationMs & " ms" &
+      "  steps " & $agent.traceMetrics.steps &
+      "  calls " & $agent.traceMetrics.modelCalls &
+      "  tools " & $agent.traceMetrics.toolCalls &
+      "  retries " & $agent.traceMetrics.retries
 
 proc attachProvider(agent: var Agent) =
   case agent.config.provider.toLowerAscii
@@ -319,6 +341,7 @@ proc initAgent*(config: AgentConfig, sessionId = "", toolAllowlist: seq[string] 
                 toolsSpecified = false): Agent =
   result.mode = modeAct
   result.config = config
+  result.traceMetrics = newTraceMetrics()
   result.projectTrusted = projectResourcesTrusted(config.workspace)
   result.toolAllowlist = toolAllowlist
   result.toolAllowlistSet = toolsSpecified
@@ -497,6 +520,8 @@ proc switchSession(agent: ptr Agent, next: Session, ui: TurnSink): Future[void] 
   ## session_end on the old transcript, restart extensions, then session_start.
   await agent.fireSessionHooks(heSessionEnd, ui)
   agent[].session = next
+  if not agent[].traceMetrics.isNil:
+    agent[].traceMetrics.reset()
   agent[].rescanPlugins(ui)
   discard agent[].session.recoverInterruptedTools()
   await agent.fireSessionHooks(heSessionStart, ui)
@@ -897,11 +922,15 @@ proc executeParallelReadOnly(agent: ptr Agent, call: ContentBlock,
   if post.hasIsError: result.isError = post.isError
 
 proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
+  if agent[].traceMetrics.isNil:
+    agent[].traceMetrics = newTraceMetrics()
   agent.bindExtensionUi(ui)
   defer:
     if not agent.extensionRuntime.isNil: agent.extensionRuntime.question = nil
   let runId = (if agent.session.id.len > 0: agent.session.id else: "session") &
     ":turn:" & $agent.session.events.len
+  agent[].traceMetrics.beginTurn(runId)
+  defer: agent[].traceMetrics.finishTurn()
   let prompt = if agent.session.events.len > 0 and
       agent.session.events[^1].kind == sekUser:
     sessionMessageText(agent.session.events[^1].message)
@@ -926,6 +955,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
     emitAutoCompact(ui, compacted)
     if compacted.didCompact:
       request = agent[].buildRequest()
+    request.turnId = runId
     if emptyResponseFollowupPending:
       request.messages.add userMessage(emptyResponseFollowup)
       emptyResponseFollowupPending = false
@@ -935,7 +965,11 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
       ui.emitAgentEvent(NimletEvent(kind: neStepStarted, runId: runId,
         sessionId: agent.session.id, turnId: runId, step: step,
         model: request.model))
-      response = await ui.generate(agent[].provider, request)
+      if not ui.generateTraced.isNil:
+        response = await ui.generateTraced(agent[].provider, request,
+          agent[].traceMetrics.traceSink)
+      else:
+        response = await ui.generate(agent[].provider, request)
     except CancelledError:
       ui.emitAgentEvent(NimletEvent(kind: neError, runId: runId,
         sessionId: agent.session.id, turnId: runId, step: step,

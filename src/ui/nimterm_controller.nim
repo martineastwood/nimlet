@@ -189,6 +189,36 @@ proc previewSink(controller: NimletController): TurnSink =
     flushPendingDelta()
     screen.transcript.apply(uiEvent)
     refresh()
+  proc generateImpl(provider: Provider, request: ProviderRequest,
+                    trace: TraceSink): Future[ProviderResponse] {.async.} =
+    screen.activity = "Waiting for model…"
+    refresh()
+    var liveRequest = request
+    liveRequest.wakeFd = controller.cancelRead
+    return await streamTextAsync(provider, liveRequest,
+      proc (event: StreamEvent): bool =
+      case event.kind
+      of seTextDelta:
+        screen.activity = "Responding…"
+        send NimletEvent(kind: neTextDelta, runId: runId,
+          step: step, text: event.text)
+        not controller.quitRequested and not controller.interruptRequested
+      of seThinkingDelta:
+        screen.activity = "Thinking…"
+        send NimletEvent(kind: neThinkingDelta, runId: runId,
+          step: step, text: event.text)
+        not controller.quitRequested and not controller.interruptRequested
+      of seToolCallDelta:
+        true
+      of seFinished:
+        refresh()
+        true
+      else:
+        refresh(false)
+        true,
+      abort = proc (): bool = controller.quitRequested or
+        controller.interruptRequested,
+      callbacks = RunCallbacks(trace: trace))
   result = TurnSink(
     emit: proc (level: MsgLevel, text: string) =
       if level == mlError:
@@ -264,34 +294,11 @@ proc previewSink(controller: NimletController): TurnSink =
       refresh(),
     copyText: proc (text: string) = copyToClipboard(text),
     generate: proc (provider: Provider,
-                    request: ProviderRequest): Future[ProviderResponse] {.async.} =
-      screen.activity = "Waiting for model…"
-      refresh()
-      var liveRequest = request
-      liveRequest.wakeFd = controller.cancelRead
-      return await streamTextAsync(provider, liveRequest,
-        proc (event: StreamEvent): bool =
-        case event.kind
-        of seTextDelta:
-          screen.activity = "Responding…"
-          send NimletEvent(kind: neTextDelta, runId: runId,
-            step: step, text: event.text)
-          not controller.quitRequested and not controller.interruptRequested
-        of seThinkingDelta:
-          screen.activity = "Thinking…"
-          send NimletEvent(kind: neThinkingDelta, runId: runId,
-            step: step, text: event.text)
-          not controller.quitRequested and not controller.interruptRequested
-        of seToolCallDelta:
-          true
-        of seFinished:
-          refresh()
-          true
-        else:
-          refresh(false)
-          true,
-        abort = proc (): bool = controller.quitRequested or
-          controller.interruptRequested)
+                    request: ProviderRequest): Future[ProviderResponse] =
+      generateImpl(provider, request, nil),
+    generateTraced: proc (provider: Provider, request: ProviderRequest,
+                          trace: TraceSink): Future[ProviderResponse] =
+      generateImpl(provider, request, trace)
   )
 
 proc resetInteraction(controller: NimletController) =
