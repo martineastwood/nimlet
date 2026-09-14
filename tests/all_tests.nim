@@ -4065,8 +4065,10 @@ read shutdown
       fpUserExec})
     let runtime = startExtensions(root, "session")
     defer: runtime.stop()
-    waitFor sleepAsync(25)
-    runtime.pump()
+    for _ in 0 ..< 100:
+      runtime.pump()
+      if runtime.statusTexts.len > 0: break
+      waitFor sleepAsync(5)
     check runtime.statusTexts == @["working"]
     check runtime.takeNotices[0].message == "started"
 

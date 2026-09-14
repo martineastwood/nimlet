@@ -367,6 +367,10 @@ proc finishTurn(controller: NimletController, keepRunning, succeeded: bool) =
   controller.interruptRequested = false
   controller.resetInteraction()
 
+proc signalExtensionUpdate(context: pointer) {.nimcall, gcsafe, raises: [].} =
+  try: cast[ptr App](context)[].post UiEvent(kind: uiTimer, timerId: "extensions")
+  except Exception: discard
+
 proc handleEvent*(controller: NimletController,
                   event: UiEvent): EventResponse =
   if event.kind == uiKey and event.key == keyCtrlF and
@@ -473,8 +477,7 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
   screen.forkChoices = agent[].session.forkChoices
   result.refreshFooter()
   result.ui = previewSink(result)
-  agent[].extensionRuntime.setOnUpdate proc() {.gcsafe.} =
-    appPtr[].post UiEvent(kind: uiTimer, timerId: "extensions")
+  agent[].extensionRuntime.setOnUpdate(signalExtensionUpdate, appPtr)
   result.turns.onFinish = proc (keepRunning, succeeded: bool) =
     controller.finishTurn(keepRunning, succeeded)
   appPtr[].addSource(result.turns)

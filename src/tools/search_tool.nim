@@ -1,6 +1,6 @@
 ## grep and glob — find files and content without shelling out to bash.
 
-import std/[asyncdispatch, atomics, json, os, osproc, re, streams, strutils]
+import std/[asyncdispatch, json, os, osproc, re, streams, strutils]
 import tool, ../workspace, nimgent
 
 const
@@ -20,48 +20,68 @@ type
     soGlob
 
 when compileOption("threads"):
-  type SearchJob = ref object
-    operation: SearchOperation
-    root, pattern, glob, relPath: string
-    maxHits: int
-    insensitive: bool
-    hits: seq[string]
-    error: string
-    finished: Atomic[bool]
+  type
+    SearchRequest = object
+      operation: SearchOperation
+      root, pattern, glob, relPath: string
+      maxHits: int
+      insensitive: bool
 
-  proc runSearchWorkerImpl(job: SearchJob) {.gcsafe.} =
+    SearchResponse = object
+      hits: seq[string]
+      error: string
+
+    SearchPipe = object
+      requests: Channel[SearchRequest]
+      responses: Channel[SearchResponse]
+
+  proc runSearchWorker(pipe: ptr SearchPipe) {.thread.} =
+    let job = pipe.requests.recv()
+    var response: SearchResponse
     try:
       if job.operation == soGrep:
         let fn = cast[proc (root, pattern, glob, relPath: string, maxHits: int,
                             insensitive: bool): seq[string] {.nimcall, gcsafe.}](grepWorkspace)
-        job.hits = fn(job.root, job.pattern, job.glob, job.relPath,
+        response.hits = fn(job.root, job.pattern, job.glob, job.relPath,
           job.maxHits, job.insensitive)
       else:
         let fn = cast[proc (root, pattern, relPath: string, maxHits: int):
                        seq[string] {.nimcall, gcsafe.}](globWorkspace)
-        job.hits = fn(job.root, job.pattern, job.relPath, job.maxHits)
+        response.hits = fn(job.root, job.pattern, job.relPath, job.maxHits)
     except CatchableError as e:
-      job.error = e.msg
-    job.finished.store(true)
+      response.error = e.msg
+    pipe.responses.send(response)
 
-  proc runSearchWorker(job: SearchJob) {.thread.} =
-    runSearchWorkerImpl(job)
+  proc newSearchPipe(): ptr SearchPipe =
+    result = cast[ptr SearchPipe](allocShared0(sizeof(SearchPipe)))
+    result.requests.open(1)
+    result.responses.open(1)
+
+  proc close(pipe: ptr SearchPipe) =
+    pipe.requests.close()
+    pipe.responses.close()
+    deallocShared(pipe)
 
 proc searchAsync(operation: SearchOperation, root, pattern, glob, relPath: string,
                  maxHits: int, insensitive: bool): Future[seq[string]] {.async.} =
   when compileOption("threads"):
-    let job = SearchJob(operation: operation, root: root, pattern: pattern,
+    let pipe = newSearchPipe()
+    defer: pipe.close()
+    pipe.requests.send(SearchRequest(operation: operation, root: root,
+      pattern: pattern,
       glob: glob, relPath: relPath, maxHits: maxHits,
-      insensitive: insensitive)
-    job.finished.store(false)
-    var thread: Thread[SearchJob]
-    createThread(thread, runSearchWorker, job)
-    while not job.finished.load:
+      insensitive: insensitive))
+    var thread: Thread[ptr SearchPipe]
+    createThread(thread, runSearchWorker, pipe)
+    var received: tuple[dataAvailable: bool, msg: SearchResponse]
+    while not received.dataAvailable:
+      received = pipe.responses.tryRecv()
+      if received.dataAvailable: break
       await sleepAsync(2)
     joinThread(thread)
-    if job.error.len > 0:
-      raise newException(IOError, job.error)
-    return job.hits
+    if received.msg.error.len > 0:
+      raise newException(IOError, received.msg.error)
+    return received.msg.hits
   else:
     if operation == soGrep:
       return grepWorkspace(root, pattern, glob, relPath, maxHits, insensitive)

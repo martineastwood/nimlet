@@ -1,6 +1,6 @@
 ## Persistent, language-neutral extensions over JSONL stdin/stdout.
 
-import std/[asyncdispatch, json, locks, os, osproc, streams, strutils,
+import std/[asyncdispatch, atomics, json, os, osproc, streams, strutils,
   tables, times]
 when defined(windows):
   import std/winlean
@@ -45,11 +45,19 @@ type
     extension*: string
     data*: JsonNode
 
-  IncomingMessage = tuple[extension: int, message: JsonNode]
+  IncomingMessage = tuple[extension: int, line: string]
+
+  UpdateSignalProc* = proc(context: pointer) {.nimcall, gcsafe, raises: [].}
+
+  UpdateSignal = object
+    callback: Atomic[pointer]
+    context: Atomic[pointer]
 
   ReaderArgs = object
-    runtime: ExtensionRuntime
+    outputHandle: FileHandle
     extension: int
+    inbox: ptr Channel[IncomingMessage]
+    signal: ptr UpdateSignal
 
   ExtensionProcess = ref object
     name: string
@@ -68,10 +76,9 @@ type
     notices: seq[ExtensionNotice]
     entries: seq[ExtensionEntry]
     question*: ExtensionQuestionProc
-    onUpdate: proc() {.closure, gcsafe.}
+    signal: UpdateSignal
     nextId: int
-    inboxLock: Lock
-    inbox: seq[IncomingMessage]
+    inbox: ptr Channel[IncomingMessage]
     responses: Table[string, JsonNode]
     questions: seq[Future[void]]
     questionCompletedAt: float
@@ -173,6 +180,8 @@ proc captureActions(runtime: ExtensionRuntime, extension: int,
   if not entry.isNil:
     runtime.entries.add ExtensionEntry(extension: namespace, data: entry)
 
+proc readHandleLine(handle: FileHandle): string {.gcsafe.}
+
 proc receive(process: Process, timeoutMs = 30_000): JsonNode =
   when defined(windows):
     ## Windows has no poll(2). PeekNamedPipe lets us wait for a complete JSONL
@@ -191,7 +200,7 @@ proc receive(process: Process, timeoutMs = 30_000): JsonNode =
             hasNewline = true
             break
         if hasNewline:
-          return parseJson(process.outputStream.readLine())
+          return parseJson(readHandleLine(process.outputHandle))
       if timeoutMs >= 0 and epochTime() >= deadline:
         raise newException(IOError, "extension response timed out")
       if process.peekExitCode() != -1:
@@ -201,7 +210,7 @@ proc receive(process: Process, timeoutMs = 30_000): JsonNode =
     var descriptor = TPollfd(fd: process.outputHandle.cint, events: POLLIN)
     if poll(descriptor.addr, 1, timeoutMs.cint) <= 0:
       raise newException(IOError, "extension response timed out")
-    parseJson(process.outputStream.readLine())
+    parseJson(readHandleLine(process.outputHandle))
 
 proc extensionLaunch(command: seq[string], dir: string):
     tuple[executable: string, args: seq[string]] =
@@ -242,23 +251,31 @@ proc extensionLaunch(command: seq[string], dir: string):
         let script = interpreter.commandInvocation(result.executable, result.args)
         return (interpreter.executable, @["/d", "/s", "/c", script])
 
+proc readHandleLine(handle: FileHandle): string {.gcsafe.} =
+  var ch: char
+  while true:
+    when defined(windows):
+      var count: int32
+      if winlean.readFile(Handle(handle), addr ch, 1, addr count, nil) == 0 or
+          count == 0: return
+    else:
+      if posix.read(handle.cint, addr ch, 1) != 1: return
+    if ch == '\n': return
+    if ch != '\r': result.add ch
+
 proc readMessages(args: ReaderArgs) {.thread.} =
   while true:
-    try:
-      let line = args.runtime.processes[args.extension].process.outputStream.readLine()
-      if line.len == 0: break
-      let message = parseJson(line)
-      var update: proc() {.closure, gcsafe.}
-      withLock args.runtime.inboxLock:
-        args.runtime.inbox.add (args.extension, message)
-        update = args.runtime.onUpdate
-      if not update.isNil: update()
-    except CatchableError:
-      break
+    let line = readHandleLine(args.outputHandle)
+    if line.len == 0: break
+    args.inbox[].send((args.extension, line))
+    let callback = cast[UpdateSignalProc](args.signal.callback.load())
+    if not callback.isNil: callback(args.signal.context.load())
 
 proc startExtensions*(workspace, sessionId: string): ExtensionRuntime =
   new(result)
-  initLock(result.inboxLock)
+  result.inbox = cast[ptr Channel[IncomingMessage]](
+    allocShared0(sizeof(Channel[IncomingMessage])))
+  result.inbox[].open()
   for dir in extensionDirs(workspace):
     let spec = commandSpec(dir / "extension.json")
     if not spec.ok:
@@ -314,7 +331,9 @@ proc startExtensions*(workspace, sessionId: string): ExtensionRuntime =
             description: description, inputSchema: schema), extension: processIndex,
             capabilities: capabilities.capabilities)
       createThread(result.processes[processIndex].reader, readMessages,
-        ReaderArgs(runtime: result, extension: processIndex))
+        ReaderArgs(outputHandle: process.outputHandle,
+          extension: processIndex, inbox: result.inbox,
+          signal: addr result.signal))
     except CatchableError as e:
       if not process.isNil:
         if process.running: process.terminate()
@@ -334,6 +353,10 @@ proc stop*(runtime: ExtensionRuntime) =
   runtime.processes.setLen(0)
   runtime.commands.setLen(0)
   runtime.tools.setLen(0)
+  if not runtime.inbox.isNil:
+    runtime.inbox[].close()
+    deallocShared(runtime.inbox)
+    runtime.inbox = nil
 
 proc answerQuestion(runtime: ExtensionRuntime, extension: int,
                     request: JsonNode): Future[void] {.async.} =
@@ -346,25 +369,27 @@ proc answerQuestion(runtime: ExtensionRuntime, extension: int,
   runtime.questionCompletedAt = epochTime()
 
 proc setOnUpdate*(runtime: ExtensionRuntime,
-                  callback: proc() {.closure, gcsafe.}) =
+                  callback: UpdateSignalProc, context: pointer = nil) =
   if runtime.isNil: return
-  withLock runtime.inboxLock: runtime.onUpdate = callback
+  runtime.signal.context.store(context)
+  runtime.signal.callback.store(cast[pointer](callback))
 
 proc pump*(runtime: ExtensionRuntime) =
   if runtime.isNil: return
-  var messages: seq[IncomingMessage]
-  withLock runtime.inboxLock:
-    swap(messages, runtime.inbox)
-  for incoming in messages:
-    let kind = incoming.message.stringField("type")
+  while true:
+    let incoming = runtime.inbox[].tryRecv()
+    if not incoming.dataAvailable: break
+    let message = try: parseJson(incoming.msg.line)
+      except CatchableError: continue
+    let kind = message.stringField("type")
     if kind == "response":
-      runtime.responses[incoming.message.stringField("id")] = incoming.message
+      runtime.responses[message.stringField("id")] = message
     elif kind == "ui_request" and
-        incoming.message.stringField("method") == "question":
-      runtime.questions.add runtime.answerQuestion(incoming.extension,
-        incoming.message)
+        message.stringField("method") == "question":
+      runtime.questions.add runtime.answerQuestion(incoming.msg.extension,
+        message)
     else:
-      runtime.captureActions(incoming.extension, incoming.message)
+      runtime.captureActions(incoming.msg.extension, message)
   for i in countdown(runtime.questions.high, 0):
     if runtime.questions[i].finished:
       runtime.questions.delete(i)
