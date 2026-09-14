@@ -34,7 +34,7 @@ import ../src/instructions
 import ../src/skills
 import ../src/commands
 import nimgent
-import nimgent/providers/[anthropic, openrouter]
+import nimgent/providers/[anthropic, google, openrouter]
 import ../src/tools/[tool, read_tool, edit_tool, write_tool, bash_tool, search_tool]
 import ../src/extensions
 import ../src/extension_runtime
@@ -1243,6 +1243,158 @@ suite "OpenRouter provider":
     config.thinking = "none"
     check "reasoning" notin providerOptions(config)
 
+  test "opencode provider defaults and thinking map to reasoning_effort":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    writeFile(root / "config.json", """{"default_provider":"opencode"}""")
+    var config = loadConfig(root, root / "config.json")
+    check config.provider == "opencode"
+    check config.model == "deepseek-v4.1-flash"
+    check config.apiKeySource == "{env:OPENCODE_API_KEY}"
+    check config.endpoint == "https://opencode.ai/zen/go/v1/chat/completions"
+    config.thinking = "high"
+    check providerOptions(config)["reasoning_effort"].getStr == "high"
+    check "reasoning" notin providerOptions(config)
+    config.thinking = "none"
+    check "reasoning_effort" notin providerOptions(config)
+
+  test "opencodezen provider defaults and thinking map to reasoning_effort":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    writeFile(root / "config.json", """{"default_provider":"opencodezen"}""")
+    var config = loadConfig(root, root / "config.json")
+    check config.provider == "opencodezen"
+    check config.model == "deepseek-v4-flash"
+    check config.apiKeySource == "{env:OPENCODE_API_KEY}"
+    check config.endpoint == "https://opencode.ai/zen/v1/chat/completions"
+    config.thinking = "high"
+    check providerOptions(config)["reasoning_effort"].getStr == "high"
+
+  test "opencode routes models by the catalog's provider.npm":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", """{
+      "opencode-go": {"models": {
+        "gpt-5.6-luna": {"provider": {"npm": "@ai-sdk/openai"}},
+        "grok-4.7": {"provider": {"npm": "@ai-sdk/openai"}},
+        "deepseek-v4.1-flash": {"provider": {"npm": "@ai-sdk/openai-compatible"}},
+        "minimax-m2.7": {"provider": {"npm": "@ai-sdk/anthropic"}},
+        "qwen3.8-flash": {"provider": {"npm": "@ai-sdk/anthropic"}},
+        "moonshot-new": {}
+      }}}""")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    var config = loadConfig(root)
+    config.provider = "opencode"
+    config.endpoint = "https://opencode.ai/zen/go/v1/chat/completions"
+    config.sessionDir = root / "sessions"
+    let router = RouteProvider(initAgent(config).provider)
+    check modelApiPackage("opencode", "gpt-5.6-luna") == "@ai-sdk/openai"
+    ## The logical provider keeps its identity in the footer and /provider.
+    check router.name == "opencode"
+    ## Catalog-driven: a model this code has never seen still routes correctly.
+    check OpenAIProvider(router.servingProvider("grok-4.7")).endpointFor(
+      "grok-4.7") == "https://opencode.ai/zen/go/v1/responses"
+    check OpenAIProvider(router.servingProvider("gpt-5.6-luna")).usesResponsesFor(
+      "gpt-5.6-luna")
+    ## Anthropic-format models get the Messages wire, which needs the session
+    ## header the gateway requires.
+    for model in ["minimax-m2.7", "qwen3.8-flash"]:
+      let wire = AnthropicProvider(router.servingProvider(model))
+      check wire.endpoint == "https://opencode.ai/zen/go/v1/messages"
+      check wire.sessionHeader == "x-opencode-session"
+    ## Chat stays the default, and an unknown package is not routed away.
+    for model in ["deepseek-v4.1-flash", "moonshot-new"]:
+      let chat = OpenAIProvider(router.servingProvider(model))
+      check chat.endpointFor(model) ==
+        "https://opencode.ai/zen/go/v1/chat/completions"
+
+  test "opencode keeps unknown models on the Chat default":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", "{}")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    var config = loadConfig(root)
+    config.provider = "opencode"
+    config.endpoint = "https://opencode.ai/zen/go/v1/chat/completions"
+    config.sessionDir = root / "sessions"
+    let router = RouteProvider(initAgent(config).provider)
+    check modelApiPackage("opencode", "grok-4.6") == ""
+    for model in ["grok-4.6", "qwen3.8-flash"]:
+      let chat = OpenAIProvider(router.servingProvider(model))
+      check chat.endpointFor(model) ==
+        "https://opencode.ai/zen/go/v1/chat/completions"
+
+  test "opencodezen routes from the Zen catalog on the plain gateway":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", """{
+      "opencode": {"models": {
+        "gpt-5.6-luna": {"provider": {"npm": "@ai-sdk/openai"}},
+        "claude-sonnet-4-6": {"provider": {"npm": "@ai-sdk/anthropic"}},
+        "gemini-3.8-flash": {"provider": {"npm": "@ai-sdk/google"}},
+        "deepseek-v4-flash": {"provider": {"npm": "@ai-sdk/openai-compatible"}},
+        "big-pickle": {}
+      }}}""")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    var config = loadConfig(root)
+    config.provider = "opencodezen"
+    config.endpoint = defaultEndpoint("opencodezen")
+    config.sessionDir = root / "sessions"
+    check catalogName("opencodezen") == "opencode"
+    let router = RouteProvider(initAgent(config).provider)
+    check router.name == "opencodezen"
+    check OpenAIProvider(router.servingProvider("gpt-5.6-luna")).endpointFor(
+      "gpt-5.6-luna") == "https://opencode.ai/zen/v1/responses"
+    let wire = AnthropicProvider(router.servingProvider("claude-sonnet-4-6"))
+    check wire.endpoint == "https://opencode.ai/zen/v1/messages"
+    check wire.sessionHeader == "x-opencode-session"
+    ## Gemini models keep the native surface, so hosted search stays reachable.
+    check GoogleProvider(router.servingProvider("gemini-3.8-flash")).endpoint ==
+      "https://opencode.ai/zen/v1"
+    check router.supports(pcHostedTools)
+    check router.supports(pcTools)
+    check not router.supports(pcEmbeddings)
+    for model in ["deepseek-v4-flash", "big-pickle"]:
+      let chat = OpenAIProvider(router.servingProvider(model))
+      check chat.endpointFor(model) ==
+        "https://opencode.ai/zen/v1/chat/completions"
+
+  test "hosted search follows the model's wire, not just the provider name":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "models-dev.json", """{
+      "opencode": {"models": {
+        "gemini-3.8-flash": {"provider": {"npm": "@ai-sdk/google"}},
+        "deepseek-v4-flash": {"provider": {"npm": "@ai-sdk/openai-compatible"}}
+      }}}""")
+    setModelsDevCachePath(root / "models-dev.json")
+    defer: setModelsDevCachePath("")
+    var config = loadConfig(root)
+    config.provider = "opencodezen"
+    config.endpoint = defaultEndpoint("opencodezen")
+    config.sessionDir = root / "sessions"
+    config.webSearch = true
+    config.model = "gemini-3.8-flash"
+    check webSearchActive(config)
+    ## The chat path has no field for Google's hosted search.
+    config.model = "deepseek-v4-flash"
+    check not webSearchActive(config)
+    check webSearchStatus(config) ==
+      "on (this provider or model has no hosted search)"
+    ## An endpoint the router cannot map stays on Chat, so search stays off too.
+    config.model = "gemini-3.8-flash"
+    config.endpoint = "http://proxy.test"
+    check not webSearchActive(config)
+
   test "google provider defaults and thinking use the native transport":
     let root = freshDir()
     defer: removeDir(root)
@@ -1849,7 +2001,9 @@ suite "slash commands":
     check "/provider [name]" in commandSuggestions("/pr")
     check "/thinking high" in commandSuggestions("/thinking ")
     check "/web on" in commandSuggestions("/web ")
-    check "/provider hyper" in commandSuggestions("/provider ")
+    check commandSuggestions("/provider ") == @["/provider anthropic", "/provider codex",
+      "/provider google", "/provider hyper", "/provider mistral", "/provider openai",
+      "/provider opencode", "/provider opencodezen", "/provider openrouter"]
     check "/provider hyper" in commandSuggestions("/provider hy")
     check "/provider google" in commandSuggestions("/provider go")
     check "/copy" in commandSuggestions("/co")
@@ -2000,6 +2154,16 @@ suite "slash commands":
       "anthropic  200k"
     check commandSuggestionDescription("/model deepseek/deepseek-v4-flash-0731") ==
       "openrouter  128k"
+
+  test "stale catalog refresh is a no-op when the cache is fresh":
+    let root = freshDir()
+    defer: removeDir(root)
+    let cache = root / "models-dev.json"
+    writeFile(cache, "{}")
+    setModelsDevCachePath(cache)
+    defer: setModelsDevCachePath("")
+    check not modelsDevCacheStale()
+    check not waitFor refreshStaleCatalogAsync()
 
   test "catalog cache is stale when missing or old":
     let root = freshDir()
@@ -2451,6 +2615,36 @@ suite "models.dev catalog":
     config.contextWindow = 42_000
     check config.effectiveContextWindow == 42_000
 
+  test "opencode reads the go subscription catalog, not plain Zen":
+    let root = freshDir()
+    defer: removeDir(root)
+    let cache = root / "models-dev.json"
+    writeFile(cache, """{
+      "opencode": {
+        "models": {
+          "deepseek-v4.1-flash": {"limit": {"context": 100000}},
+          "claude-opus-4-1": {"limit": {"context": 200000}}
+        }
+      },
+      "opencode-go": {
+        "models": {
+          "deepseek-v4.1-flash": {"limit": {"context": 1000000}}
+        }
+      }
+    }""")
+    setModelsDevCachePath(cache)
+    defer: setModelsDevCachePath("")
+    check catalogName("opencode") == "opencode-go"
+    check catalogName("openrouter") == "openrouter"
+    check lookupContextWindow("opencode", "deepseek-v4.1-flash") == 1_000_000
+    ## A Zen-only model is out of scope for the go subscription.
+    let picker = ModelPicker(currentProvider: "opencode")
+    check commandSuggestions("/model deep", picker = picker) ==
+      @["/model deepseek-v4.1-flash"]
+    check commandSuggestions("/model cla", picker = picker).len == 0
+    check commandSuggestionDescription("/model deepseek-v4.1-flash") ==
+      "opencode  1000k"
+
   test "lookup missing provider does not crash":
     let root = freshDir()
     defer: removeDir(root)
@@ -2705,7 +2899,8 @@ suite "json config":
     var agent = initAgent(config)
     check not agent.config.webSearch
     check not webSearchActive(agent.config)
-    check agent.setWebSearch(true) == "on (no effect until openai, anthropic, or google)"
+    check agent.setWebSearch(true) ==
+      "on (this provider or model has no hosted search)"
     var hosted = false
     for t in agent.buildRequest().tools:
       if t.hosted == "web_search": hosted = true
@@ -3025,6 +3220,22 @@ suite "composer and cost":
     check agent.processInput("/stats", ui)
     check "Latest cost: $1.00" in output
     check "Session cost: $2.00" in output
+
+  test "cached status footer refreshes after session append":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    config.model = "test/model"
+    config.contextWindow = 100
+    var agent = initAgent(config)
+    discard agent.statusFooter
+    agent.session.addAssistantResponse(ProviderResponse(model: "test/model",
+      usage: Usage(inputTokens: 3, outputTokens: 2), content: @[text("hi")]),
+      provider = config.provider, requestedModel = config.model)
+    check "↑3" in agent.statusFooter
+    check "↓2" in agent.statusFooter
 
 suite "editor and shell shortcuts":
   test "composer supports word deletion, yank, and undo":
@@ -4299,6 +4510,17 @@ suite "cli prompt args":
     check rpc.error.len == 0
     check rpc.mode == "rpc"
     check parseCliArgs(["--mode", "unknown"]).error.len > 0
+
+  test "version and help short-circuit argument parsing":
+    let version = parseCliArgs(["--version"])
+    check version.version
+    check version.error.len == 0
+    check version.prompt.len == 0
+    check parseCliArgs(["--help"]).help
+    check parseCliArgs(["-h"]).help
+    ## Anything after them is ignored rather than treated as a prompt.
+    check parseCliArgs(["--version", "ignored"]).prompt.len == 0
+    check nimletVersion == "0.1.0"
 
   test "fullscreen mode is selectable at startup":
     check parseCliArgs([]).fullscreen

@@ -2,7 +2,7 @@
 
 import std/[asyncdispatch, json, strtabs, strutils]
 import nimgent
-import jsonrpc_process
+import config, jsonrpc_process
 export jsonrpc_process
 
 type
@@ -288,7 +288,7 @@ proc connectCodexAppServerAsync*(command: seq[string] = @[
       "clientInfo": {
         "name": "nimlet",
         "title": "Nimlet",
-        "version": "0.1.0"
+        "version": nimletVersion
       }
     })
     await rpc.notifyAsync("initialized")

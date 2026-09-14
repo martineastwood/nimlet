@@ -55,6 +55,7 @@ Rules:
 """
 
 const
+  nimletUserAgent = "nimlet/" & nimletVersion
   maxTruncatedResponses = 8
   maxEmptyResponses = 1
   emptyResponseFollowup = """Your previous response ended after internal reasoning
@@ -62,6 +63,26 @@ without a user-facing answer. Continue now with the answer the user requested.
 Do not stop after thinking; provide the plan or explanation in your final response."""
 
 type
+  SessionTotalsCache = ref object
+    sessionId: string
+    eventCount: int
+    usage: Usage
+    cost: float
+    priced: bool
+
+  FooterState = object
+    sessionId: string
+    eventCount, maxWidth, contextWindow, themeRevision: int
+    mode: AgentMode
+    yolo, webSearchActive, webSearchConfigured: bool
+    provider, model, thinking: string
+    traceRetries, traceToolCalls: int
+    extensionStatuses: seq[string]
+
+  FooterCache = ref object
+    state: FooterState
+    value: string
+
   AgentMode* = enum
     modeAct = "act"
     modePlan = "plan"
@@ -84,9 +105,18 @@ type
     codexAppServer*: CodexAppServer
     traceMetrics*: TraceMetrics
     loadedInstructionPaths: seq[string]
+    sessionTotalsCache: SessionTotalsCache
+    footerCache: FooterCache
 
 proc sessionTotals*(agent: Agent): tuple[usage: Usage, cost: float, priced: bool] =
   ## Usage and USD cost summed over every assistant response in the session.
+  if not agent.sessionTotalsCache.isNil and
+      agent.sessionTotalsCache.sessionId == agent.session.id and
+      agent.sessionTotalsCache.eventCount == agent.session.events.len:
+    result.usage = agent.sessionTotalsCache.usage
+    result.cost = agent.sessionTotalsCache.cost
+    result.priced = agent.sessionTotalsCache.priced
+    return
   for event in agent.session.events:
     if event.kind == sekAssistant:
       result.usage.addUsage(event.usage)
@@ -94,6 +124,12 @@ proc sessionTotals*(agent: Agent): tuple[usage: Usage, cost: float, priced: bool
       if formatUsageCost(event.provider, eventModel, event.usage).len > 0:
         result.cost += estimateUsageCost(event.provider, eventModel, event.usage)
         result.priced = true
+  if not agent.sessionTotalsCache.isNil:
+    agent.sessionTotalsCache.sessionId = agent.session.id
+    agent.sessionTotalsCache.eventCount = agent.session.events.len
+    agent.sessionTotalsCache.usage = result.usage
+    agent.sessionTotalsCache.cost = result.cost
+    agent.sessionTotalsCache.priced = result.priced
 
 proc statusFooterRight*(agent: Agent): string =
   let (_, storedModel, _) = agent.session.lastAssistant
@@ -110,6 +146,24 @@ proc statusFooterRight*(agent: Agent): string =
 
 proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   ## Add fields by priority, skipping optional detail that does not fit.
+  let extensionStatuses = agent.extensionRuntime.statusTexts
+  let contextWindow = agent.config.effectiveContextWindow
+  let thinking = thinkingStatus(agent.config)
+  let webSearchEnabled = webSearchActive(agent.config)
+  let traceRetries = if agent.traceMetrics.isNil: 0 else: agent.traceMetrics.retries
+  let traceToolCalls = if agent.traceMetrics.isNil: 0 else: agent.traceMetrics.toolCalls
+  let state = FooterState(
+    sessionId: agent.session.id, eventCount: agent.session.events.len,
+    maxWidth: maxWidth, contextWindow: contextWindow,
+    themeRevision: themeRevision, mode: agent.mode, yolo: agent.yolo,
+    webSearchActive: webSearchEnabled,
+    webSearchConfigured: agent.config.webSearch,
+    provider: agent.config.provider, model: agent.config.model,
+    thinking: thinking, traceRetries: traceRetries,
+    traceToolCalls: traceToolCalls, extensionStatuses: extensionStatuses)
+  if not agent.footerCache.isNil and
+      agent.footerCache.state == state:
+    return agent.footerCache.value
   const modeWidth = 6
   proc column(text: string, width: int): string =
     text & " ".repeat(max(0, width - ansiVisibleWidth(text)))
@@ -124,11 +178,10 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
     parts.add t.paint(t.warning, "[yolo]")
   let (found, _, usage) = agent.session.lastAssistant
   if found:
-    let window = agent.config.effectiveContextWindow
-    if window > 0:
+    if contextWindow > 0:
       let used = contextTokens(usage)
       if used > 0:
-        let pct = min(100, used * 100 div window)
+        let pct = min(100, used * 100 div contextWindow)
         let color =
           if pct >= 90: t.error
           elif pct >= 70: t.warning
@@ -146,13 +199,16 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
       add t.paint(t.warning, "retry:" & $agent.traceMetrics.retries)
     if agent.traceMetrics.toolCalls > 0:
       add t.paint(t.dim, "tools:" & $agent.traceMetrics.toolCalls)
-  if webSearchActive(agent.config):
+  if webSearchEnabled:
     add t.paint(t.warning, "web")
   elif agent.config.webSearch:
     add t.paint(t.dim, "web:n/a")
-  for status in agent.extensionRuntime.statusTexts:
+  for status in extensionStatuses:
     add t.paint(t.accent, status)
-  parts.join(" · ")
+  result = parts.join(" · ")
+  if not agent.footerCache.isNil:
+    agent.footerCache.state = state
+    agent.footerCache.value = result
 
 proc statsReport(agent: Agent): string =
   let (found, storedModel, usage) = agent.session.lastAssistant
@@ -184,6 +240,37 @@ proc statsReport(agent: Agent): string =
       "  tools " & $agent.traceMetrics.toolCalls &
       "  retries " & $agent.traceMetrics.retries
 
+proc attachOpenCode(agent: Agent): Provider =
+  ## Zen's gateway serves each model on one wire format. The catalog's
+  ## `provider.npm` says which; unknown models stay on the Chat default.
+  let provider = agent.config.provider
+  let endpoint = agent.config.endpoint
+  let chat = openCodeChat(agent.config.apiKey, endpoint,
+    agent.config.requestTimeout, userAgent = nimletUserAgent)
+  let responses = siblingEndpoint(endpoint, "responses")
+  chat.route = proc (model: string): string =
+    if responses.len > 0 and modelApiPackage(provider, model) == "@ai-sdk/openai":
+      responses
+    else: ""
+  ## Models on another wire need their own provider: Messages wants the
+  ## gateway's session header, Google the native `/models/<id>` paths.
+  let messages = siblingEndpoint(endpoint, "messages")
+  let anthropicWire = if messages.len > 0:
+    openCodeMessages(agent.config.apiKey, messages,
+      agent.config.requestTimeout, userAgent = nimletUserAgent)
+  else: nil
+  let googleWire = if gatewayBase(endpoint).len > 0:
+    openCodeGoogle(agent.config.apiKey, endpoint, agent.config.requestTimeout,
+      userAgent = nimletUserAgent)
+  else: nil
+  result = routeProvider(chat, name = provider, route = proc (model: string): Provider =
+    case modelApiPackage(provider, model)
+    of "@ai-sdk/anthropic": anthropicWire
+    of "@ai-sdk/google": googleWire
+    else: nil)
+  ## Gemini on the native surface keeps hosted search; the Chat default does not.
+  if not googleWire.isNil: result.capabilities.incl pcHostedTools
+
 proc attachProvider(agent: var Agent) =
   if not agent.provider.isNil and agent.provider of CodexProvider:
     CodexProvider(agent.provider).close()
@@ -191,22 +278,25 @@ proc attachProvider(agent: var Agent) =
   of "openrouter":
     agent.provider = openRouter(agent.config.apiKey,
       agent.config.endpoint, agent.config.requestTimeout,
-      agent.config.siteUrl, agent.config.siteName)
+      agent.config.siteUrl, agent.config.siteName, nimletUserAgent)
   of "openai":
     agent.provider = openAI(agent.config.apiKey,
-      agent.config.endpoint, agent.config.requestTimeout)
+      agent.config.endpoint, agent.config.requestTimeout, nimletUserAgent)
   of "anthropic":
     agent.provider = anthropic(agent.config.apiKey,
-      agent.config.endpoint, agent.config.requestTimeout)
+      agent.config.endpoint, agent.config.requestTimeout,
+      userAgent = nimletUserAgent)
   of "hyper":
     agent.provider = hyper(agent.config.apiKey,
-      agent.config.endpoint, agent.config.requestTimeout)
+      agent.config.endpoint, agent.config.requestTimeout, nimletUserAgent)
   of "google":
     agent.provider = google(agent.config.apiKey,
-      agent.config.endpoint, agent.config.requestTimeout)
+      agent.config.endpoint, agent.config.requestTimeout, nimletUserAgent)
   of "mistral":
     agent.provider = mistral(agent.config.apiKey,
-      agent.config.endpoint, agent.config.requestTimeout)
+      agent.config.endpoint, agent.config.requestTimeout, nimletUserAgent)
+  of "opencode", "opencodezen":
+    agent.provider = agent.attachOpenCode()
   of "codex":
     agent.provider = newCodexProvider(agent.config.workspace)
   else:
@@ -451,6 +541,8 @@ proc initAgent*(config: AgentConfig, sessionId = "", toolAllowlist: seq[string] 
   result.mode = modeAct
   result.config = config
   result.traceMetrics = newTraceMetrics()
+  result.sessionTotalsCache = SessionTotalsCache()
+  result.footerCache = FooterCache()
   result.projectTrusted = projectResourcesTrusted(config.workspace)
   result.toolAllowlist = toolAllowlist
   result.toolAllowlistSet = toolsSpecified
@@ -844,7 +936,7 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
         ui.onChange()
       except CatchableError as e:
         ui.emit(mlError, "Could not refresh Codex models: " & e.msg)
-    elif refreshModelsDevCache():
+    elif await refreshModelsDevCacheAsync():
       ui.emit(mlOk, "Model metadata refreshed.")
       ui.onChange()
     else:

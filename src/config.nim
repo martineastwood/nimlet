@@ -9,11 +9,18 @@
 import std/[algorithm, json, os, strutils, tables, uri]
 import nimgent
 from nimgent/providers/anthropic import anthropicEfforts, anthropicThinkingOptions
+from nimgent/providers/openai import gatewayBase
 import models_dev, compaction
 import trust
 
 const
-  WiredProviders* = ["openrouter", "openai", "anthropic", "hyper", "google", "mistral", "codex"]
+  nimletVersion* = "0.1.0"
+  ## The Gemini API key is exported under any of these names. nimlet accepts
+  ## them all, preferring the first, so an existing key just works.
+  googleApiKeyEnvs* = ["GEMINI_API_KEY", "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY"]
+  WiredProviders* = ["anthropic", "codex", "google", "hyper", "mistral", "openai",
+    "opencode", "opencodezen", "openrouter"]
 
 type
   AgentConfig* = object
@@ -189,12 +196,21 @@ proc resolveThinking(provider, model, want: string): ThinkingPlan =
   result.label = want
   result.options = thinkingOptions(p, want)
 
+proc webSearchAvailable*(config: AgentConfig): bool =
+  ## Hosted search needs a provider that runs the search itself: the first-party
+  ## ones, or Zen's Gemini models, which nimlet sends on the native wire. The
+  ## endpoint clause mirrors the router: an unmappable base stays on Chat.
+  let p = config.provider.toLowerAscii
+  p in ["openai", "anthropic", "google"] or
+    (p == "opencodezen" and gatewayBase(config.endpoint).len > 0 and
+      modelApiPackage(p, config.model) == "@ai-sdk/google")
+
 proc webSearchActive*(config: AgentConfig): bool =
-  config.webSearch and config.provider.toLowerAscii in ["openai", "anthropic", "google"]
+  config.webSearch and webSearchAvailable(config)
 
 proc webSearchStatus*(config: AgentConfig): string =
   if webSearchActive(config): "on"
-  elif config.webSearch: "on (no effect until openai, anthropic, or google)"
+  elif config.webSearch: "on (this provider or model has no hosted search)"
   else: "off"
 
 proc thinkingStatus*(config: AgentConfig): string =
@@ -238,20 +254,32 @@ proc overrideNamed*[T](items: var seq[T], item: T) =
       return
   items.add item
 
-proc defaultApiKeySource*(provider: string): string =
+proc apiKeyEnvCandidates*(provider: string): seq[string] =
+  ## Environment variables that can hold this provider's key, best first.
   case provider.toLowerAscii
-  of "openrouter": "{env:OPENROUTER_API_KEY}"
-  of "openai": "{env:OPENAI_API_KEY}"
-  of "anthropic": "{env:ANTHROPIC_API_KEY}"
-  of "hyper": "{env:HYPER_API_KEY}"
-  of "google": "{env:AI_STUDIO_API_KEY}"
-  of "mistral": "{env:MISTRAL_API_KEY}"
-  else: ""
+  of "openrouter": @["OPENROUTER_API_KEY"]
+  of "openai": @["OPENAI_API_KEY"]
+  of "anthropic": @["ANTHROPIC_API_KEY"]
+  of "hyper": @["HYPER_API_KEY"]
+  of "google": @googleApiKeyEnvs
+  of "mistral": @["MISTRAL_API_KEY"]
+  of "opencode", "opencodezen": @["OPENCODE_API_KEY"]
+  else: @[]
 
-proc defaultApiKeyEnv(provider: string): string =
-  let source = defaultApiKeySource(provider)
-  if source.len == 0: return ""
-  source[5 .. ^2]
+proc defaultApiKeyEnv*(provider: string): string =
+  ## The name to suggest: what a fresh setup exports, and how `/doctor` reports
+  ## the provider when none of the accepted variables is set.
+  let candidates = apiKeyEnvCandidates(provider)
+  if candidates.len > 0: candidates[0] else: ""
+
+proc defaultApiKeySource*(provider: string): string =
+  let name = defaultApiKeyEnv(provider)
+  if name.len > 0: "{env:" & name & "}" else: ""
+
+proc apiKeyEnv*(provider: string): string =
+  ## Whichever accepted variable actually holds a key, or "" when none does.
+  for name in apiKeyEnvCandidates(provider):
+    if getEnv(name).len > 0: return name
 
 proc defaultEndpoint*(provider: string): string =
   case provider.toLowerAscii
@@ -261,6 +289,8 @@ proc defaultEndpoint*(provider: string): string =
   of "hyper": "https://hyper.charm.land/v1/chat/completions"
   of "google": "https://generativelanguage.googleapis.com/v1beta"
   of "mistral": "https://api.mistral.ai/v1/chat/completions"
+  of "opencode": "https://opencode.ai/zen/go/v1/chat/completions"
+  of "opencodezen": "https://opencode.ai/zen/v1/chat/completions"
   else: ""
 
 proc defaultProviderModel*(provider: string): string =
@@ -271,6 +301,8 @@ proc defaultProviderModel*(provider: string): string =
   of "anthropic": "claude-sonnet-4-6"
   of "google": "gemini-3.5-flash-lite"
   of "mistral": "mistral-vibe-cli-with-tools"
+  of "opencode": "deepseek-v4.1-flash"
+  of "opencodezen": "deepseek-v4-flash"
   of "codex": "gpt-5"
   else: ""
 
@@ -539,7 +571,9 @@ proc apiKey*(config: AgentConfig): string =
   let kind = config.authType(config.provider)
   if kind.len > 0:
     return if kind == "api_key": jstr(auth, "key") else: ""
-  getEnv(defaultApiKeyEnv(config.provider))
+  let resolved = apiKeyEnv(config.provider)
+  if resolved.len == 0: return ""
+  getEnv(resolved)
 
 proc apiKeyDescription*(config: AgentConfig): string =
   if config.provider.toLowerAscii == "codex":
@@ -549,4 +583,5 @@ proc apiKeyDescription*(config: AgentConfig): string =
   let kind = config.authType(config.provider)
   if kind.len > 0:
     return "auth " & config.authPath & " (" & kind & ")"
-  "env " & defaultApiKeyEnv(config.provider)
+  let resolved = apiKeyEnv(config.provider)
+  "env " & (if resolved.len > 0: resolved else: defaultApiKeyEnv(config.provider))

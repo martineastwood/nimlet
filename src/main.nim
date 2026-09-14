@@ -1,6 +1,6 @@
 import std/[asyncdispatch, json, os, sequtils, strutils]
 import nimgent
-import config, agent, session, hooks, events, rpc, trust
+import config, agent, session, hooks, events, rpc, trust, models_dev
 import shell
 import ui/[console, nimterm_preview, turn]
 import nimterm/[term, theme]
@@ -8,6 +8,7 @@ import nimterm/[term, theme]
 type
   CliArgs* = object
     help*: bool
+    version*: bool
     print*: bool
     mode*: string
     provider*: string
@@ -47,6 +48,9 @@ proc parseCliArgs*(args: openArray[string]): CliArgs =
     case a
     of "--help", "-h":
       result.help = true
+      return
+    of "--version":
+      result.version = true
       return
     of "--print", "-p":
       result.print = true
@@ -305,6 +309,7 @@ proc runMain*() =
     discard applyTheme("dark", detectDepth(), getCurrentDir(), ".nimlet",
       nimletConfigDir())
     printHelp()
+    echo "  --version        print the version and exit"
     echo "  --print,-p       print only the response and exit"
     echo "  --mode json      emit versioned JSONL events and exit"
     echo "  --mode rpc       serve JSONL commands until shutdown or EOF"
@@ -323,6 +328,9 @@ proc runMain*() =
     echo "  --no-approve     skip project-local resources for this process"
     echo "  --interactive,-i keep the REPL after a CLI prompt"
     echo "  prompt…          run this as the first user message (one-shot unless -i)"
+    return
+  if cli.version:
+    echo "nimlet " & nimletVersion
     return
   if cli.error.len > 0:
     stderr.writeLine cli.error
@@ -360,8 +368,12 @@ proc runMain*() =
     let sessions = listSessions(config.sessionDir, config.workspace, limit = 1)
     if sessions.len > 0:
       sessionId = sessions[0].id
-  ## Model metadata is loaded from the local cache on demand. Network refresh
-  ## is explicit via `/models refresh`, so startup stays offline and bounded.
+  ## Model metadata is read from the local cache on demand, so startup stays
+  ## offline and bounded. A stale or missing cache is refreshed in the
+  ## background rather than blocking the first paint: adapter routing falls back
+  ## to its built-in model lists until it lands, and pickers see it on their next
+  ## rebuild.
+  asyncCheck refreshStaleCatalogAsync()
   let catalogNote = ""
   var agent: Agent
   try:

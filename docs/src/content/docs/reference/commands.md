@@ -51,14 +51,15 @@ uses the local Codex App Server; `/models refresh` loads its model list and
   catalog for the active provider. The catalog is filtered from two characters, up
   to 50 entries, and each suggestion shows the provider and context size.
 - `/models refresh` fetches `models.dev` for normal providers. For `codex`, it
-  calls the local Codex App Server's model list instead.
+  calls the local Codex App Server's model list instead. A stale `models.dev`
+  cache is also refreshed automatically at startup.
 - `/thinking` with no argument shows the active level, `(provider default)`, or
   `(unsupported by model)` when the model has no reasoning control. Levels are
   `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; which ones do
   something is up to the model.
 - `/provider` alone prints the active provider. `/provider <name>` accepts
-  `openrouter`, `openai`, `anthropic`, `hyper`, or `google`, and selects that
-  provider's last model.
+  `anthropic`, `codex`, `google`, `hyper`, `mistral`, `openai`, `opencode`,
+  `opencodezen`, or `openrouter`, and selects that provider's last model.
 - `/web` shows whether hosted search is available. `/web on` enables it for
   providers that support it; it is only offered to the model in act mode.
 
@@ -170,7 +171,7 @@ Argument validation is strict, and the message tells you the shape that works:
 /plan extra                  → /plan takes no arguments
 /thinking loud               → Invalid thinking level 'loud' (use none|minimal|low|medium|high|xhigh|max)
 /web maybe                   → Invalid /web value 'maybe' (use on|off)
-/provider gemini             → Unknown provider 'gemini' (use openrouter|openai|anthropic|hyper|google|mistral|codex)
+/provider gemini             → Unknown provider 'gemini' (use anthropic|codex|google|hyper|mistral|openai|opencode|opencodezen|openrouter)
 /model refresh               → Unknown /model option 'refresh'; did you mean /models refresh?
 /models                      → Usage: /models refresh
 /session delete              → Usage: /session delete ID

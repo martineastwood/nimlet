@@ -5,7 +5,7 @@
 ## Lookup order is handled by config.effectiveContextWindow:
 ## config override → models.dev → name heuristic.
 
-import std/[httpclient, json, os, strutils, times]
+import std/[asyncdispatch, httpclient, json, os, strutils, times]
 import nimgent
 
 type CatalogIndexEntry = object
@@ -84,22 +84,6 @@ proc loadCatalogFromDisk(path: string): JsonNode =
   except CatchableError:
     result = nil
 
-proc fetchAndStore(path: string): JsonNode =
-  let client = newHttpClient(timeout = 20_000)
-  defer: client.close()
-  let body = client.getContent(modelsDevUrl)
-  let parsed = parseJson(body)
-  createDir(parentDir(path))
-  let tmp = path & ".tmp"
-  try:
-    writeFile(tmp, body)
-    moveFile(tmp, path)
-  except CatchableError:
-    if fileExists(tmp):
-      removeFile(tmp)
-    raise
-  parsed
-
 proc ensureCatalog(): JsonNode =
   ## Return parsed catalog from memory or disk without doing network I/O.
   if not gCatalog.isNil and gLoadedAt > 0 and
@@ -116,12 +100,21 @@ proc ensureCatalog(): JsonNode =
   gLoadedAt = epochTime()
   gCatalog
 
+proc catalogName*(provider: string): string =
+  ## Logical provider name → models.dev catalog key, when the two differ.
+  ## OpenCode Zen and its Go subscription share no model ids and both have
+  ## their own catalog entry; nimlet keys Zen as `opencodezen`.
+  case provider.toLowerAscii
+  of "opencode": "opencode-go"
+  of "opencodezen": "opencode"
+  else: provider
+
 proc resolveModelNode(provider, model: string): JsonNode =
   ## Provider catalog, then OpenRouter, then any name match. Nil if unknown.
   if model.len == 0: return nil
   let catalog = ensureCatalog()
   let p = provider.toLowerAscii.strip
-  result = findModelNode(catalog, p, model)
+  result = findModelNode(catalog, catalogName(p), model)
   if not result.isNil: return
   if p != "openrouter":
     result = findModelNode(catalog, "openrouter", model)
@@ -139,7 +132,7 @@ type
 proc lookupReasoningCaps*(provider, model: string): ReasoningCaps =
   ## Caps for this provider's catalog entry only. Miss → known=false (fail-open).
   if provider.len == 0 or model.len == 0: return
-  let node = findModelNode(ensureCatalog(), provider, model)
+  let node = findModelNode(ensureCatalog(), catalogName(provider), model)
   if node.isNil or node.kind != JObject: return
   result.known = true
   result.reasoning = node.getOrDefault("reasoning").getBool
@@ -168,6 +161,14 @@ proc lookupReasoningCaps*(provider, model: string): ReasoningCaps =
 proc lookupContextWindow*(provider, model: string): int =
   ## Context tokens for `provider`/`model`, or 0 if unknown / offline.
   contextFromModelNode(resolveModelNode(provider, model))
+
+proc modelApiPackage*(provider, model: string): string =
+  ## `provider.npm` for this model: which wire the gateway serves it on, as
+  ## `@ai-sdk/openai` (Responses), `@ai-sdk/openai-compatible` (chat), or
+  ## `@ai-sdk/anthropic` (messages). "" when the catalog has no entry or opinion.
+  let node = findModelNode(ensureCatalog(), catalogName(provider), model)
+  if node.isNil: return ""
+  node.getOrDefault("provider").getOrDefault("npm").getStr
 
 proc nodeAcceptsImages(node: JsonNode): bool =
   if node.isNil or node.kind != JObject: return false
@@ -244,11 +245,24 @@ proc formatUsageCost*(provider, model: string, usage: Usage): string =
   if not lookupModelCost(provider, model).found: return
   formatUsd(estimateUsageCost(provider, model, usage))
 
-proc refreshModelsDevCache*(): bool =
-  ## Explicit best-effort refresh; callers should never put this on a timer.
+proc refreshModelsDevCacheAsync*(): Future[bool] {.async.} =
+  ## Explicit best-effort refresh; false on any failure and the old cache stays.
   let path = cachePath()
   try:
-    gCatalog = fetchAndStore(path)
+    let client = newAsyncHttpClient()
+    client.timeout = 20_000
+    defer: client.close()
+    let body = await client.getContent(modelsDevUrl)
+    let parsed = parseJson(body)
+    createDir(parentDir(path))
+    let tmp = path & ".tmp"
+    try:
+      writeFile(tmp, body)
+      moveFile(tmp, path)
+    except CatchableError:
+      if fileExists(tmp): removeFile(tmp)
+      raise
+    gCatalog = parsed
     gLoadedAt = epochTime()
     true
   except CatchableError:
@@ -258,6 +272,13 @@ proc modelsDevCacheStale*(maxAgeSeconds = catalogStaleSeconds): bool =
   let path = cachePath()
   if not fileExists(path): return true
   epochTime() - getLastModificationTime(path).toUnix.float >= maxAgeSeconds.float
+
+proc refreshStaleCatalogAsync*(): Future[bool] {.async.} =
+  ## Refresh only when the catalog is missing or past its TTL. Lookups keep
+  ## working offline until it lands, and pickers retain model ids they already
+  ## know.
+  if not modelsDevCacheStale(): return false
+  return await refreshModelsDevCacheAsync()
 
 type
   CatalogModel* = object
@@ -311,10 +332,11 @@ proc findCatalogModel*(id: string, providers: openArray[string],
   if id.len == 0: return
   let want = id.toLowerAscii
   for p in orderedProviders(providers, prefer):
-    let provider = p.toLowerAscii
+    let logical = p.toLowerAscii
+    let provider = catalogName(logical)
     for entry in catalogIndex():
       if entry.provider == provider and entry.idLower == want:
-        return (true, CatalogModel(provider: entry.provider, id: entry.id,
+        return (true, CatalogModel(provider: logical, id: entry.id,
           context: entry.context))
 
 proc searchCatalogModels*(providers: openArray[string], query: string,
@@ -329,13 +351,14 @@ proc searchCatalogModels*(providers: openArray[string], query: string,
   var acc: seq[CatalogModel]
   proc take(p: string) =
     if acc.len >= cap: return
-    let provider = p.toLowerAscii
+    let logical = p.toLowerAscii
+    let provider = catalogName(logical)
     for entry in catalogIndex():
       if acc.len >= cap: return
       if entry.provider != provider or q notin entry.idLower: continue
       if entry.idLower in seen: continue
       seen.add entry.idLower
-      acc.add CatalogModel(provider: entry.provider, id: entry.id,
+      acc.add CatalogModel(provider: logical, id: entry.id,
         context: entry.context)
   for p in orderedProviders(providers, prefer):
     take(p)

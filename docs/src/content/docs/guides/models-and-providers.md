@@ -3,7 +3,7 @@ title: Models and providers
 description: Switching provider and model, thinking levels, and hosted web search.
 ---
 
-nimlet talks to five providers, one at a time. A provider is where requests go and
+nimlet talks to one provider at a time. A provider is where requests go and
 which key signs them; a model is the id you ask for there. Everything else — your
 config, your sessions, your instructions — stays the same when you switch.
 
@@ -11,11 +11,24 @@ config, your sessions, your instructions — stays the same when you switch.
 
 | Provider | Default model | Key variable | Endpoint |
 | --- | --- | --- | --- |
-| `openrouter` | `deepseek/deepseek-v4-flash-0731` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1/chat/completions` |
-| `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` |
 | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` |
-| `hyper` | `deepseek-v4-flash` | `HYPER_API_KEY` | `https://hyper.charm.land/v1/chat/completions` |
+| `codex` | — | — | — |
 | `google` | `gemini-3.5-flash-lite` | `AI_STUDIO_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
+| `hyper` | `deepseek-v4-flash` | `HYPER_API_KEY` | `https://hyper.charm.land/v1/chat/completions` |
+| `mistral` | — | — | — |
+| `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` |
+| `opencode` | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/go/v1/chat/completions` |
+| `opencodezen` | `deepseek-v4-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/v1/chat/completions` |
+| `openrouter` | `deepseek/deepseek-v4-flash-0731` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1/chat/completions` |
+
+`opencode` is the paid OpenCode Go subscription, `opencodezen` the pay-per-use
+OpenCode Zen catalog. Both are signed with the same `OPENCODE_API_KEY` — the Go
+subscription and Zen balance live on the same OpenCode account. Both gateways
+serve a model on its own wire format; nimlet routes each model by its models.dev
+catalog entry and falls back to Chat Completions, so model ids need no
+per-format setup. That includes the gateway's Gemini models, which go to the
+native Google endpoint under the same base and keep their own features, hosted
+search among them.
 
 Those are the defaults when your config says nothing: with the matching
 environment variable set, `nimlet` starts against OpenRouter and
@@ -59,8 +72,9 @@ saved defaults.
 ## The model catalog
 
 nimlet keeps a copy of the public [models.dev](https://models.dev) catalog at
-`~/.nimlet/models-dev.json` and reads it from disk. Startup never makes a network
-request, so a missing or stale cache cannot stop you working.
+`~/.nimlet/models-dev.json` and reads it from disk. A missing or stale copy is
+refreshed in the background at startup, so no lookup ever blocks on the network
+and a failed fetch cannot stop you working.
 
 The catalog is what tells nimlet:
 
@@ -76,7 +90,9 @@ The catalog is what tells nimlet:
 
 fetches the catalog (20 second timeout) and replaces the cache atomically. If the
 fetch fails you get `Could not refresh model metadata; using existing cache.` and
-the old file stays.
+the old file stays. The same fetch runs by itself at startup whenever the cache is
+missing or older than a day; until it lands, lookups use the older copy or their
+built-in fallbacks.
 
 Lookups fail open. For a model the catalog does not have, nimlet falls back: the
 context window comes from a per-family estimate (1M for Gemini, GPT-5, and
@@ -137,11 +153,16 @@ turns on the provider's own search tool. It is hosted, not local: the provider
 searches the public web as part of the same request, so there is no nimlet-side
 fetching, nothing new to approve, and no extra tool output in your transcript.
 
-It works on `openai`, `anthropic`, and `google`. On the others, `/web` reports:
+It works on `anthropic`, `google`, and `openai`, and on Zen's Gemini models,
+which nimlet sends to the provider's native Google endpoint. Anywhere else,
+`/web` reports:
 
 ```text
-on (no effect until openai, anthropic, or google)
+on (this provider or model has no hosted search)
 ```
+
+Hosted search is per model, not just per provider: switching to a Zen model that
+is served on the gateway's OpenAI-compatible path turns it off again.
 
 Hosted search is only offered to the model in act mode, and when it is active the
 model is told to use it for current docs, APIs, and facts that are not in the

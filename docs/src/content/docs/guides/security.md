@@ -237,8 +237,9 @@ workspaces you trust, and narrow what is available when you can:
 
 **Your work leaves your machine.** Whatever the model reads — file contents,
 command output, your prompts — is sent to the provider you configured, under that
-provider's terms. nimlet itself makes no other network calls: model metadata is
-read from a local cache and only refreshed when you run `/models refresh`, and
+provider's terms. nimlet's only other network call is a best-effort background
+refresh of the [models.dev](https://models.dev) catalog when its local copy is
+missing or over a day old; `/models refresh` does the same fetch on demand, and
 hosted web search (`/web on`) is performed by the provider, which is why it is
 only offered in act mode.
 
