@@ -79,6 +79,14 @@ variable before starting the agent:
 `OPENROUTER_API_KEY` for OpenRouter, `OPENAI_API_KEY` for OpenAI,
 `ANTHROPIC_API_KEY` for Anthropic, `HYPER_API_KEY` for Hyper, or
 `AI_STUDIO_API_KEY` for Google Gemini.
+
+For ChatGPT-backed Codex access, use `/login` inside nimlet. Use `/login device`
+when a browser callback is not convenient; `/auth` shows the current Codex
+account and `/logout` signs out. Codex App Server owns those credentials and
+refreshes its tokens.
+After logging in, run `/provider codex` to use the local Codex agent. Use
+`/models refresh` to load the models exposed by Codex App Server, then choose
+one with `/model <id>`; typing `/model ` offers the available choices.
 Optional project configuration is read from `.nimlet/config.json` in the
 workspace and overlays `~/.nimlet/config.json`. Global files live in
 `~/.nimlet/`:

@@ -41,6 +41,7 @@ import ../src/extension_runtime
 import ../src/hooks
 import ../src/main
 import ../src/rpc
+import ../src/codex_app_server
 import ../src/editor
 import ../src/keybindings
 import ../src/shell
@@ -152,6 +153,48 @@ proc freshDir(): string =
   result = getTempDir() / ("nimlet-test-" & $getCurrentProcessId() & "-" &
     $int(epochTime() * 1_000_000))
   createDir(result)
+
+suite "Codex App Server transport":
+  when not defined(windows):
+    test "speaks JSON-RPC over a child process and completes initialize":
+      let server = connectCodexAppServer(@[
+        "sh", "-c",
+        "read line; printf '%s\\n' '{\"id\":1,\"result\":{\"server\":\"fixture\"}}'; read line; read line; printf '%s\\n' '{\"id\":2,\"result\":{\"account\":\"fixture\"}}'"])
+      defer: server.close()
+      check server.initializeResult["server"].getStr == "fixture"
+
+      let result = waitFor server.requestAsync("account/read")
+      check result["account"].getStr == "fixture"
+
+    test "typed auth requests use the Codex account methods":
+      let server = connectCodexAppServer(@[
+        "sh", "-c",
+        "read line; printf '%s\\n' '{\"id\":1,\"result\":{\"server\":\"fixture\"}}'; read line; read line; printf '%s\\n' '{\"id\":2,\"result\":{\"account\":{\"type\":\"chatgpt\",\"planType\":\"plus\"}}}'; read line; printf '%s\\n' '{\"id\":3,\"result\":{\"type\":\"chatgpt\",\"loginId\":\"login-1\",\"authUrl\":\"https://chatgpt.com/login\"}}'; read line; printf '%s\\n' '{\"id\":4,\"result\":{}}'"])
+      defer: server.close()
+      let account = waitFor server.accountReadAsync()
+      check account["account"]["type"].getStr == "chatgpt"
+      let login = waitFor server.loginStartAsync("chatgpt")
+      check login["loginId"].getStr == "login-1"
+      discard waitFor server.logoutAsync()
+
+    test "Codex provider starts a thread and streams a turn":
+      let script = "read line; printf '%s\\n' '{\"id\":1,\"result\":{}}'; " &
+        "read line; read line; printf '%s\\n' '{\"id\":2,\"result\":{\"data\":[{\"id\":\"gpt-test\",\"isDefault\":true}]}}'; " &
+        "read line; printf '%s\\n' '{\"id\":3,\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'; " &
+        "read line; printf '%s\\n' '{\"id\":4,\"result\":{\"turn\":{\"id\":\"turn-1\"}}}'; " &
+        "printf '%s\\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"delta\":\"hello\"}}'; " &
+        "printf '%s\\n' '{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-1\",\"status\":\"completed\"}}}'"
+      let provider = newCodexProvider(command = @["sh", "-c", script])
+      defer: provider.close()
+      check provider.models == @["gpt-test"]
+      var deltas = ""
+      let response = waitFor provider.generateStreamAsync(ProviderRequest(
+        model: "gpt-test", messages: @[userMessage("hello")]),
+        proc (event: StreamEvent): bool =
+          if event.kind == seTextDelta: deltas.add event.text
+          true)
+      check deltas == "hello"
+      check response.text == "hello"
 
 proc invoke(pair: (ToolDefinition, ToolProc), input: JsonNode): ToolResult =
   waitFor pair[1](input)
@@ -1755,6 +1798,19 @@ suite "agent turn persistence":
     check agent.session.messages[2].content[1].toolUseId == "two"
 
 suite "slash commands":
+  test "parses Codex auth commands":
+    check parseSlash("/login").kind == slLogin
+    check parseSlash("/login device").arg == "device"
+    check parseSlash("/login browser").arg == "browser"
+    check parseSlash("/login nope").kind == slError
+    check parseSlash("/logout").kind == slLogout
+    check parseSlash("/auth").kind == slAuth
+    check parseSlash("/auth extra").kind == slError
+    check commandSuggestions("/login ") ==
+      @["/login browser", "/login device"]
+    check commandSuggestions("/login d") == @["/login device"]
+    check commandSuggestions("/login b") == @["/login browser"]
+
   test "suggests commands and validates arguments":
     check "/model [name]" in commandSuggestions("/mo")
     check "/models refresh" in commandSuggestions("/mo")

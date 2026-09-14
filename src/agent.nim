@@ -18,6 +18,7 @@ import nimterm/markdown
 import ui/turn
 import permissions
 import trace_metrics
+import codex_app_server
 
 const baseSystemPrompt = """
 You are a coding agent working with the user in their workspace.
@@ -80,6 +81,7 @@ type
     ## Startup warnings from extension discovery (invalid manifests, collisions).
     extensionWarnings*: seq[string]
     extensionRuntime*: ExtensionRuntime
+    codexAppServer*: CodexAppServer
     traceMetrics*: TraceMetrics
     loadedInstructionPaths: seq[string]
 
@@ -190,6 +192,8 @@ proc statsReport(agent: Agent): string =
       "  retries " & $agent.traceMetrics.retries
 
 proc attachProvider(agent: var Agent) =
+  if not agent.provider.isNil and agent.provider of CodexProvider:
+    CodexProvider(agent.provider).close()
   case agent.config.provider.toLowerAscii
   of "openrouter":
     agent.provider = openRouter(agent.config.apiKey,
@@ -207,6 +211,8 @@ proc attachProvider(agent: var Agent) =
   of "google":
     agent.provider = google(agent.config.apiKey,
       agent.config.endpoint, agent.config.requestTimeout)
+  of "codex":
+    agent.provider = newCodexProvider(agent.config.workspace)
   else:
     raise newException(ValueError, "unsupported provider: " & agent.config.provider)
 
@@ -216,6 +222,19 @@ proc applyProvider*(agent: var Agent, name: string, persist = true) =
   agent.attachProvider()
   if persist:
     persistModel(agent.config)
+
+proc applyProviderAsync*(agent: ptr Agent, name: string,
+                         persist = true): Future[void] {.async.} =
+  ## Async provider switch for App Server-backed providers.
+  if name.strip.toLowerAscii != "codex":
+    agent[].applyProvider(name, persist)
+    return
+  agent[].config.switchProvider(name)
+  if not agent[].provider.isNil and agent[].provider of CodexProvider:
+    CodexProvider(agent[].provider).close()
+  agent[].provider = await newCodexProviderAsync(agent[].config.workspace)
+  if persist:
+    persistModel(agent[].config)
 
 proc applyModel*(agent: var Agent, id: string, persist = true) =
   ## Set model for this process and persist to the write-target config.
@@ -230,10 +249,12 @@ proc applyApiKey*(agent: var Agent, key: string) =
   agent.attachProvider()
 
 proc modelPickerFrom*(agent: Agent): ModelPicker =
-  ModelPicker(
+  result = ModelPicker(
     currentModel: agent.config.model,
     defaultModel: agent.config.defaultModel,
     currentProvider: agent.config.provider)
+  if not agent.provider.isNil and agent.provider of CodexProvider:
+    result.availableModels = CodexProvider(agent.provider).models
 
 proc restoreSessionModel(agent: var Agent) =
   let (provider, storedModel) = agent.session.lastSelection
@@ -337,6 +358,97 @@ proc rescanPlugins(agent: var Agent, ui: TurnSink) =
   agent.loadedInstructionPaths = instructionPaths(agent.config.workspace)
   agent.reloadToolsAndHooks()
   reportLines(ui, mlWarn, agent.discoveryWarningLines)
+
+proc emitUi(ui: TurnSink, level: MsgLevel, message: string) =
+  if not ui.emit.isNil:
+    ui.emit(level, message)
+
+proc codexMessageHandler(ui: TurnSink,
+                         completion: Future[bool] = nil): JsonRpcMessageProc =
+  result = proc (message: JsonNode) =
+    if message.isNil or message.kind != JObject: return
+    let methodName = message.getOrDefault("method").getStr
+    let params = message.getOrDefault("params")
+    case methodName
+    of "account/login/completed":
+      let success = params.getOrDefault("success").getBool
+      if success:
+        ui.emitUi(mlOk, "Codex login complete.")
+      else:
+        let error = params.getOrDefault("error").getStr
+        ui.emitUi(mlError, if error.len > 0: "Codex login failed: " & error
+                           else: "Codex login failed.")
+      if not completion.isNil and not completion.finished:
+        completion.complete(success)
+    of "account/updated":
+      let mode = params.getOrDefault("authMode").getStr
+      if mode.len > 0:
+        ui.emitUi(mlDim, "Codex auth mode: " & mode)
+    else:
+      discard
+
+proc openCodexAppServer(agent: ptr Agent,
+                        ui: TurnSink,
+                        completion: Future[bool] = nil):
+                       Future[CodexAppServer] {.async.} =
+  if not agent[].codexAppServer.isNil:
+    return agent[].codexAppServer
+  let server = await connectCodexAppServerAsync(
+    onMessage = codexMessageHandler(ui, completion))
+  agent[].codexAppServer = server
+  server
+
+proc waitCodexLogin(server: CodexAppServer, loginId: string,
+                    completion: Future[bool], ui: TurnSink):
+                   Future[bool] {.async.} =
+  while not completion.finished:
+    if not ui.wasInterrupted.isNil and ui.wasInterrupted():
+      try:
+        discard await server.loginCancelAsync(loginId)
+      except CatchableError:
+        discard
+      if not ui.noteInterrupted.isNil:
+        ui.noteInterrupted()
+      return false
+    if not ui.poll.isNil:
+      ui.poll()
+    await sleepAsync(50)
+  return await completion
+
+proc codexAuthStatus(response: JsonNode): string =
+  let account = response.getOrDefault("account")
+  if account.isNil or account.kind == JNull:
+    return "Codex auth: not logged in"
+  let kind = account.getOrDefault("type").getStr
+  var label = if kind == "chatgpt": "ChatGPT" else: kind
+  let email = account.getOrDefault("email").getStr
+  let plan = account.getOrDefault("planType").getStr
+  if email.len > 0: label.add " (" & email & ")"
+  if plan.len > 0: label.add " [" & plan & "]"
+  "Codex auth: " & label
+
+proc bindCodexApproval(agent: ptr Agent, ui: TurnSink): CodexProvider =
+  if agent[].provider.isNil or not (agent[].provider of CodexProvider): return
+  result = CodexProvider(agent[].provider)
+  let provider = result
+  provider.approval = proc(kind, reason, command, cwd: string):
+      Future[string] {.async.} =
+    if ui.approval.isNil:
+      return "accept"
+    let name = if kind == "file_change": "edit" else: "bash"
+    var input = newJObject()
+    if command.len > 0: input["command"] = %command
+    if cwd.len > 0: input["cwd"] = %cwd
+    let call = ContentBlock(kind: ckToolUse, id: "codex", name: name,
+      input: input)
+    let prompt = if reason.len > 0: reason else:
+      (if kind == "file_change": "Allow Codex to change files?"
+       else: "Allow Codex to run this command?")
+    let decision = await ui.approval(call, prompt)
+    case decision
+    of pdAllowSession, pdAllowProject: "acceptForSession"
+    of pdAllowOnce: "accept"
+    of pdDeny: "decline"
 
 proc initAgent*(config: AgentConfig, sessionId = "", toolAllowlist: seq[string] = @[],
                 toolsSpecified = false): Agent =
@@ -582,6 +694,69 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
           ". Check the key, endpoint, model, and provider account.")
       except CatchableError:
         ui.emit(mlError, "Connection test failed. Check the key, endpoint, model, and provider account.")
+  of slLogin:
+    if not agent[].codexAppServer.isNil:
+      agent[].codexAppServer.close()
+      agent[].codexAppServer = nil
+    try:
+      let completion = newFuture[bool]("codexLogin")
+      let server = await agent.openCodexAppServer(ui, completion)
+      let loginType = if cmd.arg == "device": "chatgptDeviceCode" else: "chatgpt"
+      let response = await server.loginStartAsync(loginType)
+      let loginId = response.getOrDefault("loginId").getStr
+      if loginId.len == 0:
+        ui.emit(mlError, "Codex did not return a login id.")
+        return
+      if loginType == "chatgpt":
+        let url = response.getOrDefault("authUrl").getStr
+        if url.len == 0:
+          ui.emit(mlError, "Codex did not return a browser login URL.")
+        else:
+          ui.emit(mlPlain, "Open this URL to sign in to ChatGPT:\n" & url)
+      else:
+        let url = response.getOrDefault("verificationUrl").getStr
+        let code = response.getOrDefault("userCode").getStr
+        if url.len == 0 or code.len == 0:
+          ui.emit(mlError, "Codex did not return a device login code.")
+        else:
+          ui.emit(mlPlain, "Open " & url & " and enter code " & code)
+      ui.render()
+      if not await waitCodexLogin(server, loginId, completion, ui):
+        agent[].codexAppServer.close()
+        agent[].codexAppServer = nil
+    except CatchableError as e:
+      ui.emit(mlError, "Codex login failed: " & e.msg)
+  of slLogout:
+    var server = agent[].codexAppServer
+    var temporary = false
+    try:
+      if server.isNil:
+        server = await connectCodexAppServerAsync()
+        temporary = true
+      discard await server.logoutAsync()
+      ui.emit(mlOk, "Logged out of Codex.")
+    except CatchableError as e:
+      ui.emit(mlError, "Codex logout failed: " & e.msg)
+    finally:
+      if not agent[].codexAppServer.isNil:
+        agent[].codexAppServer.close()
+        agent[].codexAppServer = nil
+      elif temporary:
+        server.close()
+  of slAuth:
+    var server = agent[].codexAppServer
+    var temporary = false
+    try:
+      if server.isNil:
+        server = await connectCodexAppServerAsync()
+        temporary = true
+      let status = await server.accountReadAsync()
+      ui.emit(mlPlain, codexAuthStatus(status))
+    except CatchableError as e:
+      ui.emit(mlError, "Could not read Codex auth status: " & e.msg)
+    finally:
+      if temporary:
+        server.close()
   of slModel:
     if cmd.arg.len == 0:
       ui.emit(mlPlain, agent.config.model)
@@ -659,14 +834,21 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
     if cmd.arg.len == 0:
       ui.emit(mlPlain, agent.provider.name)
     else:
-      agent[].applyProvider(cmd.arg)
+      await agent.applyProviderAsync(cmd.arg)
       agent[].session.addSelection(agent.config.provider, agent.config.model)
       ui.emit(mlPlain, agent.config.provider & "  " & agent.config.model)
       ui.onChange()
   of slModelsRefresh:
     ui.emit(mlWarn, "Refreshing model metadata…")
     ui.render()
-    if refreshModelsDevCache():
+    if agent.provider of CodexProvider:
+      try:
+        discard await CodexProvider(agent.provider).refreshModelsAsync()
+        ui.emit(mlOk, "Codex models refreshed.")
+        ui.onChange()
+      except CatchableError as e:
+        ui.emit(mlError, "Could not refresh Codex models: " & e.msg)
+    elif refreshModelsDevCache():
       ui.emit(mlOk, "Model metadata refreshed.")
       ui.onChange()
     else:
@@ -926,8 +1108,10 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
   if agent[].traceMetrics.isNil:
     agent[].traceMetrics = newTraceMetrics()
   agent.bindExtensionUi(ui)
+  let codexProvider = agent.bindCodexApproval(ui)
   defer:
     if not agent.extensionRuntime.isNil: agent.extensionRuntime.question = nil
+    if not codexProvider.isNil: codexProvider.approval = nil
   let runId = (if agent.session.id.len > 0: agent.session.id else: "session") &
     ":turn:" & $agent.session.events.len
   agent[].traceMetrics.beginTurn(runId)
@@ -1221,5 +1405,10 @@ proc processInput*(agent: var Agent, input: string, ui: TurnSink): bool =
   waitFor processInputAsync(addr agent, input, ui)
 
 proc stopExtensions*(agent: var Agent) =
+  if not agent.provider.isNil and agent.provider of CodexProvider:
+    CodexProvider(agent.provider).close()
+  if not agent.codexAppServer.isNil:
+    agent.codexAppServer.close()
+    agent.codexAppServer = nil
   agent.extensionRuntime.stop()
   setExtensionCommands(@[])

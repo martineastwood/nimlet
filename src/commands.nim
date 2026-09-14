@@ -27,6 +27,9 @@ type
     slYolo
     slStats
     slDoctor
+    slLogin
+    slLogout
+    slAuth
     slModel
     slModelsRefresh
     slThinking
@@ -64,6 +67,7 @@ type
     currentModel*: string
     defaultModel*: string
     currentProvider*: string
+    availableModels*: seq[string]
 
 const CommandSpecs* = [
   CommandSpec(kind: slPlan, name: "/plan", usage: "/plan",
@@ -76,6 +80,12 @@ const CommandSpecs* = [
     description: "show model, context, token usage, and cost"),
   CommandSpec(kind: slDoctor, name: "/doctor", usage: "/doctor [test]",
     description: "show configuration and key status; optionally test the connection"),
+  CommandSpec(kind: slLogin, name: "/login", usage: "/login [flow]",
+    description: "sign in to Codex with ChatGPT"),
+  CommandSpec(kind: slLogout, name: "/logout", usage: "/logout",
+    description: "sign out of Codex"),
+  CommandSpec(kind: slAuth, name: "/auth", usage: "/auth",
+    description: "show Codex authentication status"),
   CommandSpec(kind: slHelp, name: "/help", usage: "/help",
     description: "show this help"),
   CommandSpec(kind: slModel, name: "/model", usage: "/model [name]",
@@ -137,7 +147,7 @@ proc helpText*(): string =
     "Getting started", "Model", "Session", "Trust", "UI", "Maintenance",
   ]
   const groupKinds: array[6, seq[SlashKind]] = [
-    @[slPlan, slAct, slHelp],
+    @[slPlan, slAct, slHelp, slLogin, slLogout, slAuth],
     @[slModel, slModelsRefresh, slThinking, slProvider, slWeb],
     @[slSession, slStats, slNew, slResume, slFork, slCopy, slName, slCompact],
     @[slYolo, slTrust, slPermissions],
@@ -235,7 +245,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   let matched = specNamed(command)
   if parts.len == 1 and trailingSpace and matched.found and
      matched.spec.kind in {slModelsRefresh, slThinking, slWeb, slResume, slModel,
-                           slProvider, slName, slTheme, slFork, slSession}:
+                           slProvider, slName, slTheme, slFork, slSession, slLogin}:
     return
 
   proc fail(msg: string): SlashCommand =
@@ -261,9 +271,15 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
     if parts.len > 2 or (parts.len == 2 and parts[1] != "test"):
       return fail("Usage: /doctor [test]")
   of slHelp, slPlan, slAct, slStats, slNew, slCopy, slSettings,
-     slQuit, slReload:
+     slLogout, slAuth, slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
+  of slLogin:
+    if parts.len > 2 or
+        (parts.len == 2 and parts[1].toLowerAscii notin ["device", "browser"]):
+      return fail("Usage: " & matched.spec.usage)
+    if parts.len == 2:
+      result.arg = parts[1].toLowerAscii
   of slSession:
     if parts.len == 1:
       discard
@@ -511,6 +527,16 @@ proc suggestModels(query: string, picker: ModelPicker): seq[string] =
   recents.addUniqueId(picker.currentModel)
   recents.addUniqueId(picker.defaultModel)
   let q = query.toLowerAscii
+  if picker.currentProvider.toLowerAscii == "codex" and
+      picker.availableModels.len > 0:
+    for id in recents:
+      if q.len == 0 or q in id.toLowerAscii:
+        result.add "/model " & id
+    for id in picker.availableModels:
+      if id in recents or (q.len > 0 and q notin id.toLowerAscii): continue
+      if result.len >= modelSearchCap: break
+      result.add "/model " & id
+    return
   if q.len < modelSearchMin:
     for id in recents:
       if q.len == 0 or q in id.toLowerAscii:
@@ -557,6 +583,15 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
       of slWeb:
         if incomplete:
           return @["/web on", "/web off"]
+      of slLogin:
+        let prefix = if parts.len >= 2: parts[1].toLowerAscii else: ""
+        for flow in ["browser", "device"]:
+          if prefix.len == 0 or flow.startsWith(prefix):
+            result.add matched.spec.name & " " & flow
+        if result.len > 0:
+          return
+        if incomplete:
+          return @[matched.spec.usage]
       of slResume:
         let query = restAfterCommand(input, matched.spec.name)
         if sessionDir.len > 0 and (parts.len <= 1 or incomplete or query.len > 0):

@@ -13,7 +13,7 @@ import models_dev, compaction
 import trust
 
 const
-  WiredProviders* = ["openrouter", "openai", "anthropic", "hyper", "google"]
+  WiredProviders* = ["openrouter", "openai", "anthropic", "hyper", "google", "codex"]
 
 type
   AgentConfig* = object
@@ -266,6 +266,7 @@ proc defaultProviderModel*(provider: string): string =
   of "hyper": "deepseek-v4-flash"
   of "anthropic": "claude-sonnet-4-6"
   of "google": "gemini-3.5-flash-lite"
+  of "codex": "gpt-5"
   else: ""
 
 proc loadJsonFile(path: string): JsonNode =
@@ -390,6 +391,9 @@ proc doctorReport*(config: AgentConfig): string =
   result.add "\nAuth file: " & config.authPath &
     (if fileExists(config.authPath): " (exists)" else: " (absent)")
   for p in WiredProviders:
+    if p == "codex":
+      result.add "\n" & p & ": Codex App Server"
+      continue
     var selected = config
     selected.fillProvider(p)
     result.add "\n" & p & ": " & selected.apiKeyDescription & " " &
@@ -533,6 +537,8 @@ proc apiKey*(config: AgentConfig): string =
   getEnv(defaultApiKeyEnv(config.provider))
 
 proc apiKeyDescription*(config: AgentConfig): string =
+  if config.provider.toLowerAscii == "codex":
+    return "Codex App Server"
   if config.apiKeyOverride.len > 0 and config.apiKeyOverrideProvider == config.provider:
     return "command line"
   let kind = config.authType(config.provider)

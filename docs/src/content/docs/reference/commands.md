@@ -18,10 +18,20 @@ on the [Keyboard shortcuts](/reference/keybindings/) page.
 | `/plan` | Investigate and plan with read-only tools |
 | `/act` | Enable implementation tools |
 | `/help` | Show this help |
+| `/login [flow]` | Sign in to Codex with ChatGPT |
+| `/logout` | Sign out of Codex |
+| `/auth` | Show Codex authentication status |
 
 `/plan` and `/act` switch modes and print the new one. `Shift+Tab` does the same
 thing without touching your draft. Both are covered in
 [Plan and act mode](/guides/plan-and-act/).
+
+`/login` starts the Codex browser login flow and prints the URL to open.
+`/login device` prints the device verification URL and code. Codex owns the
+credential storage and token refresh. `/auth` reads the current Codex account
+status, and `/logout` removes the Codex login. After login, `/provider codex`
+uses the local Codex App Server; `/models refresh` loads its model list and
+`/model <id>` selects a model for later turns.
 
 ## Model
 
@@ -40,9 +50,8 @@ thing without touching your draft. Both are covered in
 - Typing `/model ` opens suggestions: your current and default model, then the
   catalog for the active provider. The catalog is filtered from two characters, up
   to 50 entries, and each suggestion shows the provider and context size.
-- `/models refresh` fetches the model catalog from `models.dev` into
-  `~/.nimlet/models-dev.json`. It is the only network call nimlet makes besides
-  talking to your provider, which is why it is explicit.
+- `/models refresh` fetches `models.dev` for normal providers. For `codex`, it
+  calls the local Codex App Server's model list instead.
 - `/thinking` with no argument shows the active level, `(provider default)`, or
   `(unsupported by model)` when the model has no reasoning control. Levels are
   `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; which ones do
@@ -161,7 +170,7 @@ Argument validation is strict, and the message tells you the shape that works:
 /plan extra                  → /plan takes no arguments
 /thinking loud               → Invalid thinking level 'loud' (use none|minimal|low|medium|high|xhigh|max)
 /web maybe                   → Invalid /web value 'maybe' (use on|off)
-/provider gemini             → Unknown provider 'gemini' (use openrouter|openai|anthropic|hyper|google)
+/provider gemini             → Unknown provider 'gemini' (use openrouter|openai|anthropic|hyper|google|codex)
 /model refresh               → Unknown /model option 'refresh'; did you mean /models refresh?
 /models                      → Usage: /models refresh
 /session delete              → Usage: /session delete ID
