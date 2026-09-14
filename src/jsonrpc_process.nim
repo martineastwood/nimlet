@@ -1,6 +1,6 @@
 ## Line-oriented JSON-RPC over a child process.
 
-import std/[asyncdispatch, asyncfile, json, osproc, strtabs, tables]
+import std/[asyncdispatch, asyncfile, json, osproc, strtabs, strutils, tables]
 when not defined(windows):
   import posix
 
@@ -21,6 +21,7 @@ type
     includeVersion: bool
     onMessage: JsonRpcMessageProc
     closed: bool
+    buffered: string
 
 proc close*(client: JsonRpcProcess)
 
@@ -42,11 +43,27 @@ proc failPending(client: JsonRpcProcess, error: ref CatchableError) =
       future.fail(error)
   client.pending.clear()
 
+proc readLine(client: JsonRpcProcess): Future[string] {.async.} =
+  ## asyncfile.readLine raises IndexDefect at EOF before Nim 2.2, so read chunks.
+  while '\n' notin client.buffered:
+    let chunk = await client.output.read(4096)
+    if chunk.len == 0: break # EOF: drain whatever is left in the buffer
+    client.buffered.add chunk
+  let idx = client.buffered.find('\n')
+  if idx < 0:
+    result = client.buffered
+    client.buffered.setLen(0)
+  else:
+    result = client.buffered[0 ..< idx]
+    client.buffered.delete(0, idx)
+  if result.len > 0 and result[^1] == '\r':
+    result.setLen(result.len - 1)
+
 proc readMessages(client: JsonRpcProcess) {.async.} =
   var failure: ref CatchableError
   try:
     while not client.closed:
-      let line = await client.output.readLine()
+      let line = await client.readLine()
       if line.len == 0:
         failure = rpcError("JSON-RPC process closed stdout")
         break

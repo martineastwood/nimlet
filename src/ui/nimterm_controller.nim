@@ -485,6 +485,10 @@ proc newNimletController*(screen: NimtermScreen, app: ptr App,
 
 proc close*(controller: NimletController) =
   controller.agent[].extensionRuntime.setOnUpdate(nil)
+  controller.ui = TurnSink()
+  controller.turns.onFinish = nil
+  controller.app[].onEvent = nil
+  controller.app[].onAction = nil
   when not defined(windows):
     if controller.cancelRead >= 0:
       discard posix.close(controller.cancelRead)
