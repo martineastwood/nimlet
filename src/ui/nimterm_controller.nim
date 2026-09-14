@@ -420,6 +420,12 @@ proc handleAction*(controller: NimletController, running: var App,
         not controller.questionFuture.finished:
       controller.questionFuture.complete QuestionAnswer(selected: action.index,
         text: action.value, cancelled: action.cancelled)
+  of "menu":
+    if action.kind == "select":
+      ## Mouse selection should commit the same suggestion that Enter commits.
+      let response = screen.handle(UiEvent(kind: uiKey, key: keyEnter))
+      if response.action.kind.len > 0:
+        controller.handleAction(running, response.action)
   of "screen":
     case action.kind
     of "editor":

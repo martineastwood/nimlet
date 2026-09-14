@@ -382,6 +382,25 @@ suite "black-box terminal integration":
     check not controller.busy
     check agent.session.events[0].message.content[0].text == "hello"
 
+  test "clicking a menu suggestion accepts it like Enter":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    screen.composer.setText("/mo")
+    screen.refreshMenu()
+    var app = termapp.newApp(nil, screen)
+    discard newNimletController(screen, addr app, addr agent)
+    var canvas = newCanvas(size(60, 18))
+    screen.render(canvas, rect(0, 0, 60, 18))
+    check screen.menu.items.len > 0
+    app.dispatch(UiEvent(kind: uiMouse, mouse: umPress,
+      x: screen.menu.area.x + 2, y: screen.menu.area.y + 1))
+    check screen.composer.text == "/model "
+
   test "raw bytes submit a turn, render its result, and survive resize":
     let root = freshDir()
     defer: removeDir(root)
@@ -2146,7 +2165,7 @@ suite "slash commands":
     check copied == "latest"
     check notices == @["Copied latest assistant response."]
 
-  test "model picker recents then substring search":
+  test "model picker is alphabetical then filters by substring":
     let root = freshDir()
     defer: removeDir(root)
     let cache = root / "models-dev.json"
@@ -2170,8 +2189,9 @@ suite "slash commands":
       defaultModel: "deepseek/deepseek-v4-flash-0731",
       currentProvider: "openrouter")
     let recents = commandSuggestions("/model ", picker = picker)
-    check recents[0] == "/model deepseek/deepseek-v4-flash-0731"
-    check "/model anthropic/claude-sonnet-4" in recents
+    check recents == @[
+      "/model anthropic/claude-sonnet-4",
+      "/model deepseek/deepseek-v4-flash-0731"]
     let short = commandSuggestions("/model d", picker = picker)
     check short == @["/model deepseek/deepseek-v4-flash-0731"]
     let hits = commandSuggestions("/model clau", picker = picker)
@@ -2188,6 +2208,14 @@ suite "slash commands":
       "anthropic  200k"
     check commandSuggestionDescription("/model deepseek/deepseek-v4-flash-0731") ==
       "openrouter  128k"
+    let codex = ModelPicker(currentModel: "muse-spark-1.2-contributor",
+      defaultModel: "muse-spark-1.2-contributor", currentProvider: "codex",
+      availableModels: @["muse-spark-1.3-contributor-free",
+        "deepseek-v4-flash", "muse-spark-1.2-contributor"])
+    check commandSuggestions("/model ", picker = codex) == @[
+      "/model deepseek-v4-flash",
+      "/model muse-spark-1.2-contributor",
+      "/model muse-spark-1.3-contributor-free"]
 
   test "stale catalog refresh is a no-op when the cache is fresh":
     let root = freshDir()
@@ -2654,6 +2682,11 @@ suite "models.dev catalog":
     defer: removeDir(root)
     let cache = root / "models-dev.json"
     writeFile(cache, """{
+      "hyper": {
+        "models": {
+          "deepseek-v4.1-flash": {"limit": {"context": 500000}}
+        }
+      },
       "opencode": {
         "models": {
           "deepseek-v4.1-flash": {"limit": {"context": 100000}},
@@ -2676,7 +2709,8 @@ suite "models.dev catalog":
     check commandSuggestions("/model deep", picker = picker) ==
       @["/model deepseek-v4.1-flash"]
     check commandSuggestions("/model cla", picker = picker).len == 0
-    check commandSuggestionDescription("/model deepseek-v4.1-flash") ==
+    check commandSuggestionDescription("/model deepseek-v4.1-flash",
+      picker = picker) ==
       "opencode  1000k"
 
   test "lookup missing provider does not crash":

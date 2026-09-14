@@ -265,7 +265,7 @@ proc refreshMenu*(screen: NimtermScreen) =
   for suggestion in suggestions:
     screen.menu.items.add MenuItem(label: suggestion,
       description: commandSuggestionDescription(suggestion, screen.workspace,
-        screen.sessionDir, screen.forkChoices))
+        screen.sessionDir, screen.forkChoices, screen.modelPicker))
   if screen.menu.items.len == 0:
     screen.menu.selected = -1
   else:

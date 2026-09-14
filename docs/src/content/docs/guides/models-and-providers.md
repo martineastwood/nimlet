@@ -60,8 +60,8 @@ choice is saved as `default_provider` in your config.
 /model claude-opus-4-6          switches, and saves it
 ```
 
-Typing `/model ` opens suggestions: your current and default model first, then
-catalog matches for the active provider as you type, up to 50 entries, each
+Typing `/model ` opens alphabetized suggestions for the active provider,
+including your current and default model, up to 50 entries, each
 showing the provider and its context size. The filter starts at two characters,
 so `/model claude` gives you the Claude models the catalog knows about.
 

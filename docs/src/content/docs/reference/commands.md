@@ -47,8 +47,8 @@ uses the local Codex App Server; `/models refresh` loads its model list and
   remembers that choice per provider, so switching back and forth returns you to
   the model you last used. Changing it writes to your config file, and records a
   selection event in the session.
-- Typing `/model ` opens suggestions: your current and default model, then the
-  catalog for the active provider. The catalog is filtered from two characters, up
+- Typing `/model ` opens alphabetized suggestions from the catalog for the active
+  provider, including your current and default model. The catalog is filtered from two characters, up
   to 50 entries, and each suggestion shows the provider and context size.
 - `/models refresh` fetches `models.dev` for normal providers. For `codex`, it
   calls the local Codex App Server's model list instead. A stale `models.dev`

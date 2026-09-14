@@ -3,7 +3,7 @@
 ## CommandSpecs is the name/usage table. parseSlash is the only interpreter:
 ## live validation (commandError) and execution (agent) both read SlashCommand.
 
-import std/[os, strutils]
+import std/[algorithm, os, strutils]
 import config
 import session
 import skills
@@ -536,6 +536,7 @@ proc suggestModels(query: string, picker: ModelPicker): seq[string] =
       if id in recents or (q.len > 0 and q notin id.toLowerAscii): continue
       if result.len >= modelSearchCap: break
       result.add "/model " & id
+    result.sort()
     return
   if q.len < modelSearchMin:
     for id in recents:
@@ -545,6 +546,7 @@ proc suggestModels(query: string, picker: ModelPicker): seq[string] =
       for row in searchCatalogModels(@[picker.currentProvider], "",
           modelSearchCap - result.len, skip = recents):
         result.add "/model " & row.id
+    result.sort()
     return
   var skip: seq[string]
   for id in recents:
@@ -556,6 +558,7 @@ proc suggestModels(query: string, picker: ModelPicker): seq[string] =
   for row in searchCatalogModels(@[picker.currentProvider], query, remaining,
       skip = skip):
     result.add "/model " & row.id
+  result.sort()
 
 proc commandSuggestions*(input: string, workspace = getCurrentDir(),
                          sessionDir = "", picker = ModelPicker(),
@@ -687,7 +690,8 @@ proc commandSuggestions*(input: string, workspace = getCurrentDir(),
 proc commandSuggestionDescription*(suggestion: string,
                                    workspace = getCurrentDir(),
                                    sessionDir = "",
-                                   forkChoices: seq[ForkChoice] = @[]): string =
+                                   forkChoices: seq[ForkChoice] = @[],
+                                   picker = ModelPicker()): string =
   const resumePrefix = "/resume "
   const modelPrefix = "/model "
   const forkPrefix = "/fork "
@@ -706,7 +710,8 @@ proc commandSuggestionDescription*(suggestion: string,
   if suggestion.startsWith(modelPrefix):
     let id = suggestion[modelPrefix.len .. ^1]
     if id.len > 0 and id[0] != '[':
-      let (found, row) = findCatalogModel(id, WiredProviders)
+      let (found, row) = findCatalogModel(id, WiredProviders,
+        picker.currentProvider)
       if found:
         result = row.provider
         if row.context > 0:
