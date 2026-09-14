@@ -2493,11 +2493,11 @@ suite "json config":
     defer: removeDir(root)
     let path = root / "config.json"
     writeFile(path, """{"default_provider":"hyper","default_model":"custom-hyper",
-      "providers":{"anthropic":{"api_key":"{env:CUSTOM_ANTHROPIC_KEY}","endpoint":"https://example.com/messages"}}}""")
+      "providers":{"anthropic":{"endpoint":"https://example.com/messages"}}}""")
     var config = loadConfig(root, path)
     config.switchProvider("anthropic")
     check config.model == "claude-sonnet-4-6"
-    check config.apiKeySource == "{env:CUSTOM_ANTHROPIC_KEY}"
+    check config.apiKeySource == "{env:ANTHROPIC_API_KEY}"
     config.model = "custom-claude"
     config.switchProvider("hyper")
     check config.model == "custom-hyper"
@@ -2514,14 +2514,12 @@ suite "json config":
   test "doctor reports config layers and key presence without secrets":
     let root = freshDir()
     defer: removeDir(root)
-    let envName = "NIMLET_TEST_DOCTOR_KEY"
-    putEnv(envName, "secret-value")
-    defer: delEnv(envName)
     let path = root / "config.json"
     writeFile(path, """{"default_provider":"anthropic","providers":{"anthropic":{
-      "api_key":"{env:NIMLET_TEST_DOCTOR_KEY}","endpoint":"https://user:password@example.com/v1/messages?key=hidden#fragment"}}}""")
-    let report = doctorReport(loadConfig(root, path))
-    check envName & " set" in report
+      "endpoint":"https://user:password@example.com/v1/messages?key=hidden#fragment"}}}""")
+    writeFile(root / "auth.json", """{"anthropic":{"type":"api_key","key":"secret-value"}}""")
+    let report = doctorReport(loadConfig(root, path, authPath = root / "auth.json"))
+    check "auth " & (root / "auth.json") & " (api_key) set" in report
     check path in report
     check "https://example.com/v1/messages" in report
     for secret in ["secret-value", "password", "hidden", "fragment"]:
@@ -2531,21 +2529,18 @@ suite "json config":
     check parseSlash("/doctor invalid").kind == slError
     check parseSlash("/doctor test extra").kind == slError
 
-  test "API keys resolve from environment, literals, and config-relative files":
+  test "API keys resolve from auth.json and environment":
     let root = freshDir()
     defer: removeDir(root)
-    putEnv("NIMLET_TEST_CUSTOM_KEY", "from-env")
-    defer: delEnv("NIMLET_TEST_CUSTOM_KEY")
-    writeFile(root / "key", "from-file\n")
-    for pair in [
-        ("{env:NIMLET_TEST_CUSTOM_KEY}", "from-env"),
-        ("{file:key}", "from-file"),
-        ("literal-key", "literal-key")]:
-      let (source, expected) = pair
-      let path = root / "config.json"
-      writeFile(path, $(%*{"default_provider": "openai",
-        "providers": {"openai": {"api_key": source}}}))
-      check loadConfig(root, path).apiKey == expected
+    putEnv("OPENAI_API_KEY", "from-env")
+    defer: delEnv("OPENAI_API_KEY")
+    let path = root / "config.json"
+    writeFile(path, """{"default_provider":"openai"}""")
+    check loadConfig(root, path, authPath = root / "auth.json").apiKey == "from-env"
+    writeFile(root / "auth.json", """{"openai":{"type":"api_key","key":"from-auth"}}""")
+    let config = loadConfig(root, path, authPath = root / "auth.json")
+    check config.apiKey == "from-auth"
+    check config.apiKeyDescription == "auth " & (root / "auth.json") & " (api_key)"
 
   test "doctor test uses an isolated request and leaves session and config untouched":
     let root = freshDir()

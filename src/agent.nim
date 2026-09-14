@@ -225,7 +225,8 @@ proc applyModel*(agent: var Agent, id: string, persist = true) =
     persistModel(agent.config)
 
 proc applyApiKey*(agent: var Agent, key: string) =
-  agent.config.apiKeySource = key
+  agent.config.apiKeyOverride = key
+  agent.config.apiKeyOverrideProvider = agent.config.provider
   agent.attachProvider()
 
 proc modelPickerFrom*(agent: Agent): ModelPicker =

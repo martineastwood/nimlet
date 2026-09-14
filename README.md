@@ -74,7 +74,8 @@ PowerShell uses `pwsh` (or `powershell.exe` when `pwsh` is unavailable). Set
 that choice. POSIX shell scripts used as persistent extensions require Bash on
 Windows; PowerShell scripts and native `.exe` extensions are also supported.
 
-By default, set the provider's API key before starting the agent:
+Store the provider credential in `~/.nimlet/auth.json`, or set its environment
+variable before starting the agent:
 `OPENROUTER_API_KEY` for OpenRouter, `OPENAI_API_KEY` for OpenAI,
 `ANTHROPIC_API_KEY` for Anthropic, `HYPER_API_KEY` for Hyper, or
 `AI_STUDIO_API_KEY` for Google Gemini.
@@ -83,6 +84,7 @@ workspace and overlays `~/.nimlet/config.json`. Global files live in
 `~/.nimlet/`:
 
 - `~/.nimlet/config.json` — default provider and model
+- `~/.nimlet/auth.json` — private provider credentials
 - `~/.nimlet/AGENTS.md` — personal instructions (all projects)
 - `~/.nimlet/skills/` — global skills
 - `~/.nimlet/prompts/` — global prompt templates
@@ -94,8 +96,8 @@ workspace and overlays `~/.nimlet/config.json`. Global files live in
 To use Anthropic, run `/provider anthropic`. The first switch selects
 `claude-sonnet-4-6`; subsequent switches restore your last model for that provider.
 Use `/model <id>` to change it. Choices persist in `providers.<name>.last_model`.
-The key defaults to `ANTHROPIC_API_KEY`; `providers.anthropic.api_key` can
-select another environment variable, a credential file, or a literal value.
+Credentials can be stored in `~/.nimlet/auth.json`, or supplied through the
+provider environment variable. The key defaults to `ANTHROPIC_API_KEY`.
 Native streaming, tool calls, thinking (`/thinking high`), and hosted search
 (`/web on`) are supported. Known modern Claude models use adaptive thinking
 and model-supported effort levels; legacy thinking budgets are added once to
@@ -120,23 +122,6 @@ Configuration example:
 {
   "default_provider": "openrouter",
   "default_model": "deepseek/deepseek-v4-flash-0731",
-  "providers": {
-    "openrouter": {
-      "api_key": "{env:OPENROUTER_API_KEY}"
-    },
-    "openai": {
-      "api_key": "{file:~/.secrets/openai-key}"
-    },
-    "anthropic": {
-      "api_key": "{env:ANTHROPIC_API_KEY}"
-    },
-    "hyper": {
-      "api_key": "{env:HYPER_API_KEY}"
-    },
-    "google": {
-      "api_key": "{env:AI_STUDIO_API_KEY}"
-    }
-  },
   "agent": {
     "max_tokens": 4096,
     "request_timeout": 300,
@@ -151,9 +136,16 @@ Configuration example:
 }
 ```
 
-`api_key` accepts `{env:NAME}`, `{file:path}`, or a literal key. Relative file
-paths resolve from the config file that defines them, and `~` is supported.
-Credential files may end with a newline.
+Credentials use this separate file:
+
+```json
+{
+  "openrouter": { "type": "api_key", "key": "sk-or-..." },
+  "anthropic": { "type": "api_key", "key": "sk-ant-..." }
+}
+```
+
+Save it as `~/.nimlet/auth.json` and keep it out of version control.
 
 Interactive keybindings are configured as action IDs under the top-level
 `keybindings` object. Values are a single key string or an array; an empty

@@ -1,4 +1,5 @@
 ## JSON settings: global ~/.nimlet/config.json, overlay .nimlet/config.json.
+## Credentials: private ~/.nimlet/auth.json.
 ## Known fields only on load (missing keys get defaults). Saves patch the
 ## write target in place.
 ##
@@ -18,6 +19,8 @@ type
   AgentConfig* = object
     workspace*: string
     writePath*: string   ## project config if it exists, else global
+    authPath*: string
+    auth*: JsonNode      ## private provider credentials from auth.json
     sourcePaths*: seq[string]
     lastModels*: Table[string, string]
     provider*: string
@@ -26,6 +29,8 @@ type
     defaultModel*: string
     theme*: string
     apiKeySource*: string
+    apiKeyOverride*: string
+    apiKeyOverrideProvider*: string
     endpoint*: string
     siteUrl*: string
     siteName*: string
@@ -240,6 +245,11 @@ proc defaultApiKeySource*(provider: string): string =
   of "google": "{env:AI_STUDIO_API_KEY}"
   else: ""
 
+proc defaultApiKeyEnv(provider: string): string =
+  let source = defaultApiKeySource(provider)
+  if source.len == 0: return ""
+  source[5 .. ^2]
+
 proc defaultEndpoint*(provider: string): string =
   case provider.toLowerAscii
   of "openrouter": "https://openrouter.ai/api/v1/chat/completions"
@@ -331,11 +341,23 @@ proc providerOptions*(config: AgentConfig): JsonNode =
     if result["output_config"].len == 0: result.delete("output_config")
   result = overlay(result, resolveThinking(config.provider, config.model, want).options)
 
+proc authEntry(config: AgentConfig, provider: string): JsonNode =
+  if config.auth.isNil or config.auth.kind != JObject or provider notin config.auth:
+    return newJObject()
+  let entry = config.auth[provider]
+  if entry.kind == JObject: entry else: newJObject()
+
+proc authType(config: AgentConfig, provider: string): string =
+  jstr(config.authEntry(provider), "type").toLowerAscii
+
 proc fillProvider*(config: var AgentConfig, provider: string) =
   let p = provider.toLowerAscii
   config.provider = p
   let settings = config.providerBlock(p)
-  config.apiKeySource = jstr(settings, "api_key", defaultApiKeySource(p))
+  config.apiKeySource = if config.authType(p).len > 0:
+    "auth " & config.authPath
+  else:
+    defaultApiKeySource(p)
   config.endpoint = jstr(settings, "endpoint")
   if config.endpoint.len == 0:
     config.endpoint = defaultEndpoint(p)
@@ -365,6 +387,8 @@ proc doctorReport*(config: AgentConfig): string =
   for path in config.sourcePaths:
     result.add "\n  " & path & (if fileExists(path): " (exists)" else: " (absent)")
   result.add "\nConfig write target: " & config.writePath
+  result.add "\nAuth file: " & config.authPath &
+    (if fileExists(config.authPath): " (exists)" else: " (absent)")
   for p in WiredProviders:
     var selected = config
     selected.fillProvider(p)
@@ -382,18 +406,6 @@ proc expandConfigPath(value, fallback: string): string =
   if value.isAbsolute:
     return value.normalizedPath
   (getCurrentDir() / value).normalizedPath
-
-proc prepareCredentials(doc: JsonNode, path: string): JsonNode =
-  result = copy(doc)
-  for _, settings in jobj(result, "providers"):
-    if settings.kind != JObject: continue
-    let source = jstr(settings, "api_key")
-    if not source.startsWith("{file:") or not source.endsWith("}"): continue
-    let value = source[6 .. ^2]
-    let resolved = if value.startsWith("~/"): getHomeDir() / value[2 .. ^1]
-      elif value.isAbsolute: value
-      else: path.parentDir / value
-    settings["api_key"] = %("{file:" & resolved.normalizedPath & "}")
 
 proc applyDoc(config: var AgentConfig, doc: JsonNode) =
   config.providers = jobj(doc, "providers")
@@ -487,12 +499,15 @@ proc persistQueueModes*(config: AgentConfig) =
   writeFile(config.writePath, pretty(doc) & "\n")
 
 proc loadConfig*(workspace = getCurrentDir(), configPath = "",
-                 globalPath = ""): AgentConfig =
+                 globalPath = "", authPath = ""): AgentConfig =
   result.workspace = expandFilename(workspace)
+  result.authPath = if authPath.len > 0: authPath
+                    else: nimletConfigDir() / "auth.json"
+  result.auth = loadJsonFile(result.authPath)
   if configPath.len > 0:
     result.sourcePaths = @[configPath]
     result.writePath = configPath
-    result.applyDoc(prepareCredentials(loadJsonFile(configPath), configPath))
+    result.applyDoc(loadJsonFile(configPath))
     return
   let globalFile = if globalPath.len > 0: globalPath
                    else: nimletConfigDir() / "config.json"
@@ -501,26 +516,26 @@ proc loadConfig*(workspace = getCurrentDir(), configPath = "",
   result.sourcePaths = @[globalFile, projectFile]
   let useProject = projectResourcesTrusted(result.workspace)
   result.writePath = if useProject and dirExists(projectDir): projectFile else: globalFile
-  let globalDoc = prepareCredentials(loadJsonFile(globalFile), globalFile)
+  let globalDoc = loadJsonFile(globalFile)
   let projectDoc = if useProject:
-    prepareCredentials(loadJsonFile(projectFile), projectFile)
+    loadJsonFile(projectFile)
   else:
     newJObject()
   result.applyDoc(overlay(globalDoc, projectDoc))
 
 proc apiKey*(config: AgentConfig): string =
-  let source = config.apiKeySource
-  if source.startsWith("{env:") and source.endsWith("}"):
-    return getEnv(source[5 .. ^2])
-  if source.startsWith("{file:") and source.endsWith("}"):
-    try: return readFile(source[6 .. ^2]).strip(leading = false, chars = {'\r', '\n'})
-    except CatchableError: return ""
-  source
+  if config.apiKeyOverride.len > 0 and config.apiKeyOverrideProvider == config.provider:
+    return config.apiKeyOverride
+  let auth = config.authEntry(config.provider)
+  let kind = config.authType(config.provider)
+  if kind.len > 0:
+    return if kind == "api_key": jstr(auth, "key") else: ""
+  getEnv(defaultApiKeyEnv(config.provider))
 
 proc apiKeyDescription*(config: AgentConfig): string =
-  let source = config.apiKeySource
-  if source.startsWith("{env:") and source.endsWith("}"):
-    return "env " & source[5 .. ^2]
-  if source.startsWith("{file:") and source.endsWith("}"):
-    return "file " & source[6 .. ^2]
-  "literal"
+  if config.apiKeyOverride.len > 0 and config.apiKeyOverrideProvider == config.provider:
+    return "command line"
+  let kind = config.authType(config.provider)
+  if kind.len > 0:
+    return "auth " & config.authPath & " (" & kind & ")"
+  "env " & defaultApiKeyEnv(config.provider)

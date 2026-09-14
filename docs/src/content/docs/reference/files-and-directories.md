@@ -11,7 +11,7 @@ This page is a stub. Content is planned but not written yet.
 
 One table, generated from config/plugin-root code so it cannot drift.
 
-- Global: `~/.nimlet/config.json`, `AGENTS.md`, `skills/`, `prompts/`,
+- Global: `~/.nimlet/config.json`, `~/.nimlet/auth.json`, `AGENTS.md`, `skills/`, `prompts/`,
   `tools/`, `extensions/`, `themes/`, `sessions/`, `models-dev.json`, `clips/`
 - Portable/global agent roots: `~/.agents/skills`, `~/.agents/prompts`,
   `~/.agents/extensions`

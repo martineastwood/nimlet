@@ -207,20 +207,19 @@ you do not trust, and grant per session with `s` while you are still deciding.
 file, and nimlet does not scan output or transcripts for tokens and redact them.
 Sessions are plain JSONL files under `~/.nimlet/sessions/` unless you pass
 `--no-session`, so anything you paste into the prompt is written there. Keep
-secrets out of the workspace and pass them by environment variable:
+secrets out of the workspace and store them in the private auth file or pass
+them by environment variable:
 
-```json title=".nimlet/config.json"
+```json title="~/.nimlet/auth.json"
 {
-  "providers": {
-    "openai": { "api_key": "{env:OPENAI_API_KEY}" }
-  }
+  "openai": { "type": "api_key", "key": "sk-..." }
 }
 ```
 
-`{file:path}` works the same way for a key that lives in a file. `--api-key`
-never writes the key anywhere, but it does land in your shell history, so prefer
-the environment variable. `/doctor` prints the endpoint without credentials or
-query parameters, and reports only whether each key is set — never its value.
+`--api-key` never writes the key anywhere, but it does land in your shell
+history, so prefer the auth file or an environment variable. `/doctor` prints
+the endpoint without credentials or query parameters, and reports only whether
+each key is set — never its value.
 
 **Extensions are programs, not settings.** A project extension runs as your user,
 and an extension can start when nimlet starts, before you have seen any output

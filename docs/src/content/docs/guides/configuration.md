@@ -3,16 +3,16 @@ title: Configuration
 description: Global and project settings, credentials, provider options, and /doctor.
 ---
 
-nimlet reads two optional JSON files and merges them:
+nimlet reads two optional configuration files and one private credential file:
 
 | File | Applies to |
 | --- | --- |
 | `~/.nimlet/config.json` | Everything you run |
 | `<workspace>/.nimlet/config.json` | One project (only when the project is trusted) |
+| `~/.nimlet/auth.json` | Provider credentials for your user |
 
 There is no config command to run first: missing files are normal, and every
-setting has a default. Many people never write more than a provider, a model, and
-a key.
+setting has a default. Many people never write more than a provider and a model.
 
 ## How the two files combine
 
@@ -25,38 +25,36 @@ Settings are merged key by key, and the project wins:
   the global entry of the same name.
 
 Startup flags are a third layer, for one process only: `--provider`, `--model`,
-`--thinking`, `--api-key`, and `--tools` override the files and are never written
-back.
+`--thinking`, `--api-key`, and `--tools` override configuration and credentials
+and are never written back.
 
 A minimal global config:
 
 ```json title="~/.nimlet/config.json"
 {
   "default_provider": "anthropic",
-  "default_model": "claude-sonnet-4-6",
-  "providers": {
-    "anthropic": { "api_key": "{env:ANTHROPIC_API_KEY}" }
-  }
+  "default_model": "claude-sonnet-4-6"
 }
 ```
 
 ## Credentials
 
-`providers.<name>.api_key` takes one of three forms:
+Credentials live in `~/.nimlet/auth.json`, outside project configuration:
 
-| Value | Meaning |
-| --- | --- |
-| `{env:NAME}` | Read the environment variable each time the key is needed |
-| `{file:path}` | Read the key from a file. `~` expands, and a relative path resolves from the config file that declares it. A trailing newline is stripped |
-| anything else | A literal key, stored in the config file |
+```json title="~/.nimlet/auth.json"
+{
+  "anthropic": { "type": "api_key", "key": "sk-ant-..." },
+  "openai": { "type": "api_key", "key": "sk-..." }
+}
+```
 
-If `api_key` is absent, a per-provider environment variable is used instead:
+The entry is keyed by provider and uses `type: "api_key"`. If an entry is absent,
+the per-provider environment variable is used instead:
 `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `HYPER_API_KEY`, or
-`AI_STUDIO_API_KEY`. Exporting the variable is enough; no config needed.
+`AI_STUDIO_API_KEY`. Exporting the variable is enough; no configuration needed.
 
-`{env:...}` and `{file:...}` keep keys out of the file, which matters if the file
-is committed. `/doctor` reports the source — `env NAME`, `file /path`, or
-`literal` — and whether it resolves, never the value.
+`--api-key` is an in-memory override for one process. `/doctor` reports whether
+the credential comes from `auth.json` or the environment, never the value.
 
 ## Provider settings
 
@@ -65,7 +63,6 @@ Everything under `providers.<name>`, where `<name>` is `openrouter`, `openai`,
 
 | Key | Purpose |
 | --- | --- |
-| `api_key` | Credential source, as above |
 | `endpoint` | Override the base URL, for a proxy or gateway |
 | `site_url`, `site_name` | Attribution headers, for providers that want them |
 | `options` | Native API request fields, merged into each request |
@@ -187,6 +184,7 @@ Config sources (later overrides earlier):
   /Users/you/.nimlet/config.json (exists)
   /Users/you/code/project/.nimlet/config.json (absent)
 Config write target: /Users/you/.nimlet/config.json
+Auth file: /Users/you/.nimlet/auth.json (exists)
 openrouter: env OPENROUTER_API_KEY missing
 openai: env OPENAI_API_KEY missing
 anthropic: env ANTHROPIC_API_KEY set
@@ -208,11 +206,7 @@ endpoint, or a model id is the suspect.
   "theme": "auto",
   "providers": {
     "openrouter": {
-      "api_key": "{env:OPENROUTER_API_KEY}",
       "options": { "provider": { "sort": "latency" } }
-    },
-    "openai": {
-      "api_key": "{file:~/.secrets/openai-key}"
     }
   },
   "agent": {
@@ -241,7 +235,7 @@ endpoint, or a model id is the suspect.
 
 | Variable | Effect |
 | --- | --- |
-| `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `HYPER_API_KEY`, `AI_STUDIO_API_KEY` | Default credentials when `api_key` is not set |
+| `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `HYPER_API_KEY`, `AI_STUDIO_API_KEY` | Credentials when no auth entry is present |
 | `NIMLET_THINKING` | Overrides `agent.thinking` for this run |
 | `NIMLET_SHELL` | Forces the shell used by `bash` and shell shortcuts (`bash`, `pwsh`, `cmd.exe`, or a POSIX-compatible path) |
 | `VISUAL`, `EDITOR` | The editor `Ctrl-G` opens the composer in: `VISUAL` first, then `EDITOR`, falling back to `nano` |
