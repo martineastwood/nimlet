@@ -311,7 +311,6 @@ proc newCodexProviderAsync*(workingDir = "", command: seq[string] = @[
     "codex", "app-server"]): Future[CodexProvider] {.async.} =
   new(result)
   result.name = "codex"
-  result.capabilities = {pcStreaming, pcTools}
   result.workingDir = workingDir
   let provider = result
   result.appServer = await connectCodexAppServerAsync(command, workingDir,

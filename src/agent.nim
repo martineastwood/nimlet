@@ -268,8 +268,6 @@ proc attachOpenCode(agent: Agent): Provider =
     of "@ai-sdk/anthropic": anthropicWire
     of "@ai-sdk/google": googleWire
     else: nil)
-  ## Gemini on the native surface keeps hosted search; the Chat default does not.
-  if not googleWire.isNil: result.capabilities.incl pcHostedTools
 
 proc attachProvider(agent: var Agent) =
   if not agent.provider.isNil and agent.provider of CodexProvider:

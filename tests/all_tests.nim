@@ -1425,9 +1425,6 @@ suite "OpenRouter provider":
     ## Gemini models keep the native surface, so hosted search stays reachable.
     check GoogleProvider(router.servingProvider("gemini-3.8-flash")).endpoint ==
       "https://opencode.ai/zen/v1"
-    check router.supports(pcHostedTools)
-    check router.supports(pcTools)
-    check not router.supports(pcEmbeddings)
     for model in ["deepseek-v4-flash", "big-pickle"]:
       let chat = OpenAIProvider(router.servingProvider(model))
       check chat.endpointFor(model) ==
@@ -1476,7 +1473,7 @@ suite "OpenRouter provider":
     check providerOptions(config)["reasoning_effort"].getStr == "high"
     let agent = initAgent(config)
     check agent.provider.name == "google"
-    check agent.provider.supports(pcHostedTools)
+    check webSearchAvailable(config)
 
   test "the Gemini API key answers to Google's own variable names":
     let root = freshDir()
