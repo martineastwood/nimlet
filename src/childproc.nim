@@ -117,7 +117,7 @@ proc waitForChildAsync*(p: Process, timeout: int,
     if remaining <= 0:
       stopChild(p)
       return (weTimeout, -1)
-    await sleepAsync(min(10, max(1, int(remaining * 1000))))
+    await sleepAsync(min(50, max(1, int(remaining * 1000))))
 
 proc truncateOutput*(output: string, limit: int): string =
   let outputLimit = max(2, limit)

@@ -401,6 +401,32 @@ suite "black-box terminal integration":
       x: screen.menu.area.x + 2, y: screen.menu.area.y + 1))
     check screen.composer.text == "/model "
 
+  test "escape closes the mention menu and keeps the prompt text":
+    let root = freshDir()
+    defer: removeDir(root)
+    writeFile(root / "alpha.txt", "a")
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    screen.composer.setText("open @alpha")
+    screen.composer.cursor = screen.composer.text.len
+    screen.refreshMenu()
+    check screen.menu.items.mapIt(it.label) == @["@alpha.txt"]
+    check screen.handle(UiEvent(kind: uiKey, key: keyEscape)).handled
+    check screen.composer.text == "open @alpha"
+    check screen.menu.items.len == 0
+    discard screen.handle(UiEvent(kind: uiKey, key: keyChar, text: "x"))
+    check screen.menu.items.len == 0
+    discard screen.handle(UiEvent(kind: uiKey, key: keyBackspace))
+    check screen.composer.text == "open @alpha"
+    check screen.menu.items.len == 1
+    discard screen.handle(UiEvent(kind: uiKey, key: keyEscape))
+    check screen.menu.items.len == 0
+    check screen.composer.text == "open @alpha"
+    discard screen.handle(UiEvent(kind: uiKey, key: keyEscape))
+    check screen.composer.text == ""
+
   test "raw bytes submit a turn, render its result, and survive resize":
     let root = freshDir()
     defer: removeDir(root)
@@ -507,6 +533,26 @@ suite "black-box terminal integration":
     check backend.frame.getCell(0, ruleY).style.background.kind == colorDefault
     check backend.frame.getCell(2, promptY).glyph.int == ord('>')
     check backend.frame.getCell(2, promptY).style.foreground.kind != colorDefault
+
+  test "composer caret stays a visible block over existing text":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    let backend = DecoderBackend(dimensions: size(60, 18))
+    let screen = newNimtermScreen("test", root, config.sessionDir,
+      ModelPicker())
+    var app = termapp.newApp(backend, screen)
+    screen.composer.setText("abc")
+    screen.composer.cursor = 1
+    app.render()
+    let row = screen.composer.area.y + screen.composer.paddingTop
+    let caretX = screen.composer.area.x + screen.composer.paddingLeft +
+      ansiVisibleWidth(screen.composer.prefix) + 1
+    check backend.frame.getCell(caretX, row).glyph.int == ord('b')
+    check attrReverse in backend.frame.getCell(caretX, row).style.attributes
+    check attrReverse notin
+      backend.frame.getCell(caretX - 1, row).style.attributes
 
   test "activity has its own row above the input rule":
     let root = freshDir()

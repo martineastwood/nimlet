@@ -29,6 +29,7 @@ type
     forkChoices*: seq[ForkChoice]
     history*: seq[string]
     historyIndex*: int
+    menuDismissedFor: string
     busy*: bool
     spinnerStartedAt*: float
     activity*: string
@@ -48,6 +49,11 @@ type
     appliedThemeRevision: int
     stylesReady: bool
 const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+proc accentCursorStyle(t: Theme): Style =
+  ## Reverse the accent so the caret stays a visible block over existing text.
+  t.themedStyle(t.accent, "", {attrBold}).withAttribute(attrReverse)
+
 method focusable*(screen: NimtermScreen): bool = true
 
 method children*(screen: NimtermScreen): seq[Widget] =
@@ -121,10 +127,11 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
       t.themedStyle(t.accent), t.themedStyle(t.heading), descriptionStyle,
       selectedStyle),
     transcript: newTranscriptWidget(),
-    composer: newInput(style = composerStyle,
-      cursorStyle = composerAccentStyle, cursorBarStyle = composerAccentStyle),
+    composer: newInput(style = composerStyle, prefixStyle = composerAccentStyle,
+      cursorStyle = accentCursorStyle(t), cursorBarStyle = composerAccentStyle),
     searchInput: newInput(prefix = "Search: ", style = composerStyle,
-      cursorStyle = composerAccentStyle, cursorBarStyle = composerAccentStyle),
+      prefixStyle = composerAccentStyle, cursorStyle = accentCursorStyle(t),
+      cursorBarStyle = composerAccentStyle),
     workspace: workspace,
     sessionDir: sessionDir,
     keybindings: if keybindings.isNil: newJObject() else: keybindings,
@@ -133,8 +140,6 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
     headerSelectionStart: -1, headerSelectionEnd: -1,
     headerSelectionStyle: selectedStyle, themeName: t.name,
     appliedThemeRevision: -1)
-  when compiles(result.composer.prefixStyle = composerAccentStyle):
-    result.composer.prefixStyle = composerAccentStyle
   if sessionId.len > 0:
     let prefix = "Session: "
     let marker = prefix & sessionId
@@ -254,8 +259,9 @@ proc replaySession*(screen: NimtermScreen, session: Session) =
 
 proc refreshMenu*(screen: NimtermScreen) =
   let input = screen.composer.text
-  let hasSuggestions = input.strip.startsWith("/") or
-    mentionAt(input, screen.composer.cursor).active
+  if input != screen.menuDismissedFor: screen.menuDismissedFor = ""
+  let hasSuggestions = screen.menuDismissedFor.len == 0 and
+    (input.strip.startsWith("/") or mentionAt(input, screen.composer.cursor).active)
   let suggestions = if hasSuggestions:
     commandSuggestions(input, screen.workspace, screen.sessionDir,
       screen.modelPicker, screen.composer.cursor, screen.forkChoices)
@@ -294,17 +300,12 @@ proc refreshMenuTheme(screen: NimtermScreen) =
   screen.composer.style = t.themedStyle(t.text)
   screen.searchInput.style = t.themedStyle(t.text)
   let composerAccentStyle = t.themedStyle(t.accent, "", {attrBold})
-  when compiles(screen.composer.prefixStyle = composerAccentStyle):
-    screen.composer.prefixStyle = composerAccentStyle
-    screen.composer.cursorStyle = screen.composer.prefixStyle
-    screen.composer.cursorBarStyle = screen.composer.prefixStyle
-  else:
-    screen.composer.cursorStyle = composerAccentStyle
-    screen.composer.cursorBarStyle = composerAccentStyle
-  screen.searchInput.cursorStyle = composerAccentStyle
+  screen.composer.prefixStyle = composerAccentStyle
+  screen.composer.cursorStyle = accentCursorStyle(t)
+  screen.composer.cursorBarStyle = composerAccentStyle
+  screen.searchInput.prefixStyle = composerAccentStyle
+  screen.searchInput.cursorStyle = accentCursorStyle(t)
   screen.searchInput.cursorBarStyle = composerAccentStyle
-  when compiles(screen.searchInput.prefixStyle = composerAccentStyle):
-    screen.searchInput.prefixStyle = composerAccentStyle
   screen.transcript.userStyle = t.themedStyle(t.muted)
   screen.transcript.assistantStyle = t.themedStyle(t.text)
   screen.transcript.thinkingStyle = t.themedStyle(t.muted, "",
@@ -489,6 +490,13 @@ proc convertImagePathInput(screen: NimtermScreen): bool =
 proc bound(screen: NimtermScreen, action: string, key: Key): bool =
   bindingMatches(screen.keybindings, action, key)
 
+proc dismissMenu(screen: NimtermScreen): bool =
+  ## Escape closes the suggestion menu and leaves the prompt text alone.
+  if screen.menu.items.len == 0: return false
+  screen.menuDismissedFor = screen.composer.text
+  screen.refreshMenu()
+  true
+
 proc editorKey(screen: NimtermScreen, key: Key): Key =
   keybindings.editorKey(screen.keybindings, key)
 
@@ -598,6 +606,7 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
       return screen.actionHandled("quit")
     return eventHandled
   if screen.bound("app.interrupt", event.key):
+    if screen.dismissMenu(): return eventHandled
     screen.historyIndex = -1
     screen.composer.clear()
     screen.refreshMenu()
@@ -611,9 +620,10 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
   of keyCopy:
     return screen.transcript.copySelection()
   of keyEscape:
-    screen.historyIndex = -1
-    screen.composer.clear()
-    screen.refreshMenu()
+    if not screen.dismissMenu():
+      screen.historyIndex = -1
+      screen.composer.clear()
+      screen.refreshMenu()
   of keyBackspace, keyDelete, keyChar, keyLeft, keyRight, keyHome, keyEnd,
      keyCtrlA, keyCtrlE, keyCtrlK, keyCtrlU, keyCtrlW, keyCtrlY, keyCtrlZ,
      keyAltB, keyAltD, keyAltF, keyShiftEnter:

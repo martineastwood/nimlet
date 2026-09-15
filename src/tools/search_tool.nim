@@ -77,7 +77,7 @@ proc searchAsync(operation: SearchOperation, root, pattern, glob, relPath: strin
     while not received.dataAvailable:
       received = pipe.responses.tryRecv()
       if received.dataAvailable: break
-      await sleepAsync(2)
+      await sleepAsync(50)
     joinThread(thread)
     if received.msg.error.len > 0:
       raise newException(IOError, received.msg.error)

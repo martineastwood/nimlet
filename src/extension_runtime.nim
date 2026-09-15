@@ -205,7 +205,7 @@ proc receive(process: Process, timeoutMs = 30_000): JsonNode =
         raise newException(IOError, "extension response timed out")
       if process.peekExitCode() != -1:
         raise newException(IOError, "extension exited before responding")
-      sleep(10)
+      sleep(50)
   else:
     var descriptor = TPollfd(fd: process.outputHandle.cint, events: POLLIN)
     if poll(descriptor.addr, 1, timeoutMs.cint) <= 0:
@@ -414,7 +414,7 @@ proc requestAsync(runtime: ExtensionRuntime, extension: int,
         int((epochTime() - max(started, runtime.questionCompletedAt)) * 1000) >=
           ext.timeoutMs:
       raise newException(IOError, "extension response timed out")
-    await sleepAsync(25)
+    await sleepAsync(50)
 
 proc invoke*(runtime: ExtensionRuntime, name,
              arguments: string): Future[JsonNode] {.async.} =

@@ -385,8 +385,8 @@ proc runRpc*(agent: var Agent) =
       if input.strip.len > 0: runtime.handleRpcLine(input)
       runtime.shuttingDown = true
       if not runtime.active.isNil: runtime.signalCancel()
-    if hasPendingOperations(): asyncdispatch.poll(10)
-    else: sleep(10)
+    if hasPendingOperations(): asyncdispatch.poll(50)
+    else: sleep(50)
   waitFor (addr agent).fireSessionHooks(heSessionEnd)
   runtime.send sessionEventJson("session_end", agent.session.id,
     not runtime.hadFailure)
