@@ -79,12 +79,15 @@ enough for every package underneath.
 You can change your mind later:
 
 - `/trust` shows whether this project's resources are loaded.
-- `/trust on` loads them now, `/trust off` unloads them. No restart needed.
+- `/trust on` enables them now, and `/trust off` disables them. Tools, skills,
+  prompts, extensions, and system prompt files are rescanned without a restart.
+  Project configuration was merged at startup, so restart nimlet to apply or
+  remove project config values and to change the config write target.
 - `--approve` answers yes for one run, `--no-approve` answers no.
 
 :::note
 Trust only covers files inside the project. Your own tools, skills, extensions,
-and prompts in `~/.nimlet/` always load — they are yours, and they follow you
+and prompts in `~/.nimlet/` always load - they are yours, and they follow you
 between projects.
 :::
 
@@ -110,7 +113,7 @@ tries the same thing.
 
 What gets remembered is deliberately coarse:
 
-- For `bash`, the whole normalized command — so `ls   -la` and `ls -la` are the
+- For `bash`, the whole normalized command - so `ls   -la` and `ls -la` are the
   same grant, but `npm test` and `npm run build` are two different ones.
 - For everything else, the tool name: `git`, or the name of the extension tool.
 
@@ -155,7 +158,7 @@ nothing to lose. Everywhere else, `s` is usually what you actually want.
 
 Plan mode is a read-only mode for looking around before you commit to anything.
 It exposes file reads, searches, the read-only Git tool, skills, and questions to
-you — plus extension tools whose manifest declares only read-only capabilities.
+you - plus extension tools whose manifest declares only read-only capabilities.
 Everything else is unavailable, and the model gets a clear error if it tries:
 
 ```
@@ -169,7 +172,7 @@ first.
 
 ## The workspace boundary
 
-File tools — `read`, `write`, `edit`, `grep`, `glob`, and `git` — resolve paths
+File tools - `read`, `write`, `edit`, `grep`, `glob`, and `git` - resolve paths
 against your workspace and refuse anything that escapes it, including through a
 symlink:
 
@@ -219,7 +222,7 @@ them by environment variable:
 `--api-key` never writes the key anywhere, but it does land in your shell
 history, so prefer the auth file or an environment variable. `/doctor` prints
 the endpoint without credentials or query parameters, and reports only whether
-each key is set — never its value.
+each key is set - never its value.
 
 **Extensions are programs, not settings.** A project extension runs as your user,
 and an extension can start when nimlet starts, before you have seen any output
@@ -232,11 +235,11 @@ there is no interface to ask, so tools execute without stopping. Use them on
 workspaces you trust, and narrow what is available when you can:
 
 ```sh
-./nimlet -p "summarize the README" --tools read
+nimlet -p "summarize the README" --tools read
 ```
 
-**Your work leaves your machine.** Whatever the model reads — file contents,
-command output, your prompts — is sent to the provider you configured, under that
+**Your work leaves your machine.** Whatever the model reads - file contents,
+command output, your prompts - is sent to the provider you configured, under that
 provider's terms. nimlet's only other network call is a best-effort background
 refresh of the [models.dev](https://models.dev) catalog when its local copy is
 missing or over a day old; `/models refresh` does the same fetch on demand, and

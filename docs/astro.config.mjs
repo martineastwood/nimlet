@@ -8,11 +8,11 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'nimlet',
-			description: 'A minimal native coding agent written in Nim.',
-			customCss: ['./src/styles/sidebar.css'],
+			description: 'A local coding agent for software projects.',
+			customCss: ['./src/styles/sidebar.css', './src/styles/landing.css'],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/martineastwood/nimlet' }],
 			sidebar: [
-				{ label: 'Introduction', slug: 'index' },
+				{ label: 'Overview', slug: 'index' },
 				{ label: 'Quickstart', slug: 'guides/quickstart' },
 				{ label: 'Configuration', slug: 'guides/configuration' },
 				{ label: 'Interactive TUI', slug: 'guides/interactive-tui' },

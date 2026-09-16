@@ -31,7 +31,7 @@ looks roughly like this:
 ```jsonl
 {"type":"session","workspace":"/Users/you/code/nimlet"}
 {"type":"user","role":"user","content":[{"type":"text","text":"why is the parser test failing?"}]}
-{"type":"assistant","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"bash","input":{"command":"nimble test"}}],"model":"..."}
+{"type":"assistant","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"bash","input":{"command":"npm test"}}],"model":"..."}
 {"type":"tool_result","id":"call_1","output":"exit_code: 1","is_error":true}
 ```
 
@@ -57,7 +57,7 @@ Thinking: (default)
 ```
 
 `/new` starts a fresh session and clears the transcript. The old one stays on
-disk, so nothing is lost — it will still be there under `/resume`.
+disk, so nothing is lost - it will still be there under `/resume`.
 
 `/name fix the parser` gives the current session a title. The name shows up in
 session lists, which makes a stack of timestamps much easier to tell apart.
@@ -76,7 +76,7 @@ Sessions (newest first):
 ```
 
 Each line shows how long ago the session was last written, then its name or the
-first thing you asked, then the id. Start typing to filter the list — the text
+first thing you asked, then the id. Start typing to filter the list - the text
 you type is matched against the id, the name, and that first message. The filter
 searches every session, not just the newest 20.
 
@@ -97,8 +97,8 @@ session starts with.
 You can also resume straight from the shell:
 
 ```sh
-./nimlet --resume                      # the latest session in this workspace
-./nimlet --session 1789233281025102    # one specific session
+nimlet --resume                      # the latest session in this workspace
+nimlet --session 1789233281025102    # one specific session
 ```
 
 Sessions are filtered by the workspace they were started in, so a project's
@@ -115,7 +115,7 @@ hidden from workspace lists. They can still be opened by id.
 ## Forking a conversation
 
 A fork is a new session that starts from part of an old one. Nothing about your
-files changes — you branch the conversation, not the code.
+files changes - you branch the conversation, not the code.
 
 `/fork` opens a menu of your messages in the current session, numbered in order.
 `/fork 3` forks directly from your third message. The new session contains
@@ -173,7 +173,7 @@ picker shortcuts above:
 
 Deleting asks for confirmation and moves the file into a trash folder beside the
 others (`~/.nimlet/sessions/.trash/`) rather than erasing it, so `/session
-restore` can bring it back. The session you are currently in cannot be deleted —
+restore` can bring it back. The session you are currently in cannot be deleted -
 switch to another one with `/new` or `/resume` first.
 
 ## Where they are stored
@@ -194,7 +194,7 @@ directory you started nimlet in.
 
 These are ordinary files, so normal tools work on them: `grep` them, copy them to
 another machine, or delete a session outside nimlet if you prefer. Just avoid
-editing lines by hand — each line has to stay valid JSON for the session to load.
+editing lines by hand - each line has to stay valid JSON for the session to load.
 
 ## Where to go next
 

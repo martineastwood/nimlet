@@ -36,7 +36,7 @@ the image with your next message.
 
 :::tip[Shift+Enter submits instead of making a new line?]
 Not every terminal tells nimlet that Shift was held, so `Shift+Enter` can arrive
-as a plain Enter. When that happens, use `Alt+J` instead — it always inserts a
+as a plain Enter. When that happens, use `Alt+J` instead - it always inserts a
 newline.
 :::
 

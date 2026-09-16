@@ -5,8 +5,8 @@ description: Project and global AGENTS.md guidance for the agent.
 
 A coding agent that does not know your conventions will guess at them. nimlet
 reads instruction files from your project and puts them in front of the model on
-every request, so "use Nimble", "tests live in `tests/all_tests.nim`", or "do not
-touch the generated client" are known before the first tool call rather than
+every request, so "run `npm test`", "tests live in `tests/all_tests.js`", or "do
+not touch the generated client" are known before the first tool call rather than
 discovered by trial and error.
 
 This page covers where those files are found, how they are ordered, and how to
@@ -22,7 +22,7 @@ In each directory, nimlet looks for **one** file, first match wins:
 
 Two places are searched:
 
-- `~/.nimlet/` — your personal guidance, applied to every project you work in
+- `~/.nimlet/` - your personal guidance, applied to every project you work in
 - every directory from your workspace **up** to the repository root
 
 The override file wins over `AGENTS.md` in the same directory, which is handy for
@@ -37,7 +37,7 @@ Less-specific files come first, more-specific files last. For this layout:
 ```text
 ~/.nimlet/AGENTS.md                 global: be terse, prefer minimal diffs
 ~/code/monorepo/                    repository root (has .git/)
-├── AGENTS.md                       use Nimble; run nimble test
+├── AGENTS.md                       use npm; run npm test
 └── backend/                        ← you start nimlet here
     └── AGENTS.md                   backend speaks to Postgres; tests in tests/
 ```
@@ -52,11 +52,11 @@ Be terse. Prefer minimal diffs.
 </file>
 
 <file path="../AGENTS.md">
-Use Nimble. Run `nimble test` before claiming a change works.
+Use npm. Run `npm test` before claiming a change works.
 </file>
 
 <file path="AGENTS.md">
-The backend speaks to Postgres. Integration tests live in tests/all_tests.nim.
+The backend speaks to Postgres. Integration tests live in tests/all_tests.js.
 </file>
 ```
 
@@ -69,7 +69,7 @@ does not get overridden by a stale sentence in a narrower file.
 
 ## Where the walk stops
 
-- It stops at the directory that contains `.git` (either a directory or a file —
+- It stops at the directory that contains `.git` (either a directory or a file -
   worktrees and submodules use a file). Anything above the repository root is not
   read.
 - If there is no `.git` anywhere above the workspace, the walk continues to the
@@ -80,7 +80,7 @@ does not get overridden by a stale sentence in a narrower file.
 ## Files below your workspace load when they are needed
 
 A monorepo-wide prompt should not carry every team's rules. If you start nimlet at
-the repository root and it reads `backend/src/main.nim`, nimlet looks for
+the repository root and it reads `backend/src/server.js`, nimlet looks for
 instruction files between the workspace and that file's directory and attaches
 what it finds to the read result:
 
@@ -93,7 +93,7 @@ Migrations live in backend/src/db/migrations. Never edit files in db/generated.
 
 These arrive with the tool result rather than in the system prompt, and each file
 is sent once per session: reading a second file in the same subtree does not
-repeat it. Only `read` triggers this — `grep` and `glob` results do not carry
+repeat it. Only `read` triggers this - `grep` and `glob` results do not carry
 instructions.
 
 ## Size, caching, and when edits land
@@ -126,24 +126,25 @@ Two more files let you change the system prompt itself:
 make it read files before editing them, and tell it to treat file contents as
 information rather than instructions. You keep the mode line, project
 instructions, and skill metadata, but nothing else. Almost everyone wants
-`APPEND_SYSTEM.md` instead — and `AGENTS.md` before either.
+`APPEND_SYSTEM.md` instead - and `AGENTS.md` before either.
 :::
 
 Trust is checked for the project copies only. `.nimlet/SYSTEM.md` and
 `.nimlet/APPEND_SYSTEM.md` in a project you have not trusted are ignored, while
-project `AGENTS.md` files are read either way. See [Security](/guides/security/)
-for what trust covers.
+project `AGENTS.md` files are read either way. Trust changes rescan system prompt
+files, but project configuration values are loaded at startup. See
+[Security](/guides/security/) for what trust covers.
 
 ## Writing instructions that help
 
 - **Keep them short.** Every line is sent on every request, in a spot where cache
   reuse depends on them not changing.
-- **Write rules, not essays.** "Run `nimble test` before reporting success" beats
+- **Write rules, not essays.** "Run `npm test` before reporting success" beats
   three paragraphs about testing philosophy.
 - **Put commands and paths in them.** The agent's own guesses about your build
   system are the most common source of wasted turns.
 - **Point at files instead of restating them.** "Follow the patterns in
-  `src/session.nim`" stays true as the code changes; a copied-out API does not.
+  `src/session.js`" stays true as the code changes; a copied-out API does not.
 - **Put narrow rules in narrow places.** A nested `AGENTS.md` next to the files it
   governs only loads when someone reads those files, so it cannot mislead work
   elsewhere in the repository.

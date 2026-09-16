@@ -5,8 +5,8 @@ description: Read-only investigation with /plan, then implementation with /act.
 
 nimlet runs in one of two modes:
 
-- **Act** — the default. The agent can read, edit, and run commands.
-- **Plan** — read-only. The agent reads files, searches the workspace, and checks
+- **Act** - the default. The agent can read, edit, and run commands.
+- **Plan** - read-only. The agent reads files, searches the workspace, and checks
   Git history, then tells you what it found and what it would do.
 
 Plan mode exists because the most expensive mistake an agent makes is a confident
@@ -54,10 +54,10 @@ These built-in tools are available:
 | `glob` | Find files by path pattern |
 | `git` | Read-only status, log, show, diff, and blame |
 | `read_skill` | Load a skill body |
-| `ask_user` | Ask you a question with options |
+| `ask_user` | Ask you a question with options, in the interactive TUI |
 
 Extension tools are included too, but only when their manifest declares read-only
-capabilities — `"capabilities": ["read"]`, or `["user"]` for something that only
+capabilities - `"capabilities": ["read"]`, or `["user"]` for something that only
 talks to you. A manifest without a capabilities list is treated as unsafe, so
 those tools stay in act mode.
 
@@ -68,7 +68,7 @@ those tools stay in act mode.
 - hosted web search: the provider-side `web_search` tool is only offered in act
   mode
 - extension tools that are not read-only
-- extension hooks — `tool_call`, `tool_result`, `session_start`, `turn_end`, and
+- extension hooks - `tool_call`, `tool_result`, `session_start`, `turn_end`, and
   the rest do not fire while you are in plan mode
 
 The model is told the current mode in its instructions for each request, along
@@ -111,14 +111,14 @@ Most of nimlet behaves exactly as usual:
 
 ## When to plan, and when to act
 
-- **Unfamiliar repository or subsystem** — plan first. Let the agent read, then
+- **Unfamiliar repository or subsystem** - plan first. Let the agent read, then
   read its summary of what it found.
-- **A bug you can describe but not locate** — plan, then `/act` in the same
+- **A bug you can describe but not locate** - plan, then `/act` in the same
   session. Act mode is told to reuse the plan and the tool results already in the
   conversation instead of exploring the repository again.
-- **A small change you fully understand** — just act. Planning a one-line fix
+- **A small change you fully understand** - just act. Planning a one-line fix
   costs a round trip and buys nothing.
-- **Something that affects other people** — plan, then agree on the approach
+- **Something that affects other people** - plan, then agree on the approach
   before any files move.
 
 Planning is optional and there is no plan file to write, review, or commit. The

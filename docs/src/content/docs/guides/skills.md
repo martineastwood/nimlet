@@ -5,7 +5,7 @@ description: Passive Markdown capabilities the model loads only when needed.
 
 A skill is a folder containing a `SKILL.md`: a written procedure the model can
 pick up when a task calls for it. Cutting a release, reviewing a migration,
-following your team's debugging checklist. It is just Markdown — a skill can
+following your team's debugging checklist. It is just Markdown - a skill can
 describe commands, but it cannot run anything.
 
 What makes skills worth the extra file layout is *when* they cost something. Only
@@ -45,8 +45,8 @@ description: Cut a release, tag it, and update the changelog.
 ---
 
 1. Check `git status` is clean.
-2. Bump the version in `nimlet.nimble` and commit it.
-3. Run `nimble test`, then `git tag v$VERSION` and push the tag.
+2. Bump the version in the package manifest and commit it.
+3. Run the project's test command, then `git tag v$VERSION` and push the tag.
 4. Add the release notes to `CHANGELOG.md`.
 ```
 
@@ -94,7 +94,7 @@ after the name is appended to the request:
 Loads the release skill and adds "version 0.4.0 only" to the end of the message.
 The model receives `Follow the "release" skill.` followed by the file body.
 
-`read_skill` works in plan mode too — loading instructions does not change
+`read_skill` works in plan mode too - loading instructions does not change
 anything on disk.
 
 ## Which files are read
@@ -110,7 +110,7 @@ description: Review a diff for correctness and style.
 
 Both are plain `key: value` lines; the values can be quoted. Anything else in the
 frontmatter is left alone. Unlike prompt templates, the whole file is sent when
-the skill loads, so the frontmatter is part of what the model sees — a few extra
+the skill loads, so the frontmatter is part of what the model sees - a few extra
 lines, nothing more.
 
 Without frontmatter:
@@ -121,7 +121,7 @@ Without frontmatter:
 Matching is case-insensitive, so `/skill:Review` finds `review`. Avoid spaces in
 skill names: `/skill:code review` cannot be parsed as a command, and skills whose
 names contain a space are left out of the completion list. A model can still load
-them by name, since its own list includes them — but you cannot type them.
+them by name, since its own list includes them - but you cannot type them.
 
 ## Size, caching, and edits
 
@@ -150,7 +150,7 @@ extension.
 ## Writing a skill that gets used
 
 - **Make the description a trigger.** "Cut a release, tag it, and update the
-  changelog" beats "release stuff" — the model chooses from that sentence alone.
+  changelog" beats "release stuff" - the model chooses from that sentence alone.
 - **Write steps, not background.** Numbered actions with real commands beat
   explanation, because the model already knows what a release is.
 - **Name the files and commands.** Exact paths save a round of searching.

@@ -22,7 +22,7 @@ commands asks the first time.
 
 Everything else asks: `bash`, the read-only `git` tool, and any tool an extension
 provides. The `git` tool asking looks odd until you notice it can be pointed at
-any path in the workspace — and it only ever asks once, since the answer can be
+any path in the workspace - and it only ever asks once, since the answer can be
 remembered.
 
 ## The prompt
@@ -53,7 +53,7 @@ A few things worth knowing while the prompt is up:
   are not one of the keys do nothing rather than typing into the composer.
 - Denying is not remembered. The model is told the call was denied, and in the
   next turn it can propose something else or explain what it wanted.
-- If the command cannot be remembered, the keypad is shorter — just
+- If the command cannot be remembered, the keypad is shorter - just
   `[enter] once` and `[n] deny`. There is no session or project option to choose,
   because neither would be honoured.
 
@@ -61,15 +61,15 @@ A few things worth knowing while the prompt is up:
 
 What gets remembered is deliberately coarse, in two shapes:
 
-- **`bash`** — the whole normalized command. Whitespace is collapsed, so
+- **`bash`** - the whole normalized command. Whitespace is collapsed, so
   `npm   test` and `npm test` are the same grant. Arguments and flags are part of
   the key, so `npm test` does not cover `npm test -- --watch`, and a redirect goes
   its own way: `npm test > /tmp/out` is a third grant.
-- **Everything else** — the tool name: `tool:git`, or the name of the extension
+- **Everything else** - the tool name: `tool:git`, or the name of the extension
   tool (`tool:lint`).
 
 That is the whole model. There are no patterns, no wildcards, and no way to grant
-`bash` in general — which is the point, since "any command" is the thing you do
+`bash` in general - which is the point, since "any command" is the thing you do
 not want to hand over by accident.
 
 ## Commands that are never remembered
@@ -86,7 +86,7 @@ mkfs          shutdown      reboot
 
 The check is a word match on the lowercased command, not a shell parser. `sudo`
 counts anywhere it appears, `rm -rf build && echo done` counts, and a command that
-merely contains the word — `echo rm` — counts too. False positives here are cheap;
+merely contains the word - `echo rm` - counts too. False positives here are cheap;
 the alternative is trusting a command line that a shell will interpret.
 
 If you genuinely want one of these to run without asking again, approve it once,
@@ -133,7 +133,7 @@ In the workspace you were working in:
 - It is an ordinary file: readable, editable, deletable. The order of the list
   does not matter.
 - Grants outlive a rename. If an extension renames a tool, the old
-  `tool:old-name` entry becomes dead weight — `/permissions clear` prunes it.
+  `tool:old-name` entry remains until you clear the project grants.
 - Since it is a file in your repository, think about whether you want to commit
   it. A shared `bash:npm test` is usually fine; a shared grant for a deploy script
   is a decision for whoever clones next.
@@ -165,7 +165,7 @@ ones: `read`, `grep`, `glob`, `git`, `read_skill`, `ask_user`, plus extension
 tools that declare read-only capabilities. They execute directly through a
 separate tool list, so the permission policy is not consulted at all.
 
-Your grants are not lost when you switch modes — they belong to the process, and
+Your grants are not lost when you switch modes - they belong to the process, and
 they are still there when you `/act` again. Extension hooks do not fire in plan
 mode either, so nothing gets a chance to intervene.
 
@@ -176,7 +176,7 @@ tools run without asking. Keep those runs pointed at workspaces you trust, and
 narrow what is available when you can:
 
 ```sh
-./nimlet -p "summarize the README" --tools read
+nimlet -p "summarize the README" --tools read
 ```
 
 The `approval_required` event in JSON mode is emitted by the interactive TUI; a

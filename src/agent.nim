@@ -558,7 +558,7 @@ proc buildRequest*(agent: Agent): ProviderRequest =
   let systemPrompt = loadSystemPrompt(agent.config.workspace)
   result = ProviderRequest(
     model: agent.config.model,
-    sessionId: agent.session.id,
+    conversationId: agent.session.id,
     system: @[if systemPrompt.replacementFound: systemPrompt.replacement
               else: baseSystemPrompt],
     messages: agent.session.messagesForModel,

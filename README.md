@@ -1,78 +1,24 @@
 # nimlet
 
-A native coding agent written in Nim.
+A local coding agent for software projects.
 
-## Build and test
+## Get started
 
-```sh
-nimble build
-nimble test
-nimble idleSmoke   # ~60s at prompt; near-zero CPU (see scripts/idle_smoke.sh)
-```
+This README assumes the `nimlet` binary is installed and available on your
+`PATH`. No language toolchain or source checkout is required to use it.
 
-Set `NIMTERM_PERF=1` when debugging frame and event-to-render latency.
-
-## Linux runtime dependencies
-
-Release binaries include the Nim and Nimble package code, but HTTPS and regular
-expression support use the system OpenSSL and PCRE libraries. Debian/Ubuntu
-users should install the runtime dependencies:
+Set a provider credential, then run nimlet from the project you want to inspect
+or change:
 
 ```sh
-sudo apt update
-sudo apt install ca-certificates libpcre3 openssl
+export OPENROUTER_API_KEY=your-key
+cd /path/to/your/project
+nimlet
 ```
 
-The `openssl` package pulls in the matching OpenSSL runtime for the
-distribution (`libssl3` on some releases and `libssl3t64` on newer Ubuntu).
-
-Nim supports static linking when static C libraries are available, but nimlet
-currently uses Nim's default dynamically loaded OpenSSL and PCRE wrappers.
-
-## Windows and macOS runtime dependencies
-
-For distributed binaries, include the matching OpenSSL and PCRE shared
-libraries in the release archive or application bundle. Windows users should
-place the required `.dll` files beside `nimlet.exe`; macOS users should receive
-the required `.dylib` files in the bundle. Users do not need Nim or Nimble.
-
-The PCRE library name depends on the Nim version used to build the binary: Nim
-2.0 uses PCRE1, while current Nim releases use PCRE2. Build and package the
-binary and native libraries with the same Nim release.
-
-For local macOS builds using current Nim, Homebrew provides the libraries:
-
-```sh
-brew install openssl@3 pcre2
-DYLD_LIBRARY_PATH="$(brew --prefix openssl@3)/lib:$(brew --prefix pcre2)/lib" ./nimlet
-```
-
-For a real release, bundle these libraries and configure the application
-loader path instead of requiring `DYLD_LIBRARY_PATH`.
-
-nimlet depends on the sibling [nimgent](../nimgent) package (LLM client
-library) and [nimterm](../nimterm) (terminal UI primitives). Local development
-resolves both via `nim.cfg`; with Docker Compose, `../nimgent` is mounted at
-`/nimgent`. The `nimgent` package requirement resolves installed or published
-versions; `nimterm` is currently developed from this sibling checkout.
-
-Native Windows builds are supported. From PowerShell:
-
-```powershell
-nimble build
-.\nimlet.exe
-```
-
-From Git Bash, the same binary can be built and started with `nimble build` and
-`./nimlet.exe`. The Windows nimterm backend uses the native console API when
-available and ANSI/VT byte streams for Windows Terminal, ConPTY, and MSYS/Git
-Bash. Windows Terminal or another modern VT-capable terminal is recommended.
-
-Shell tools follow the current environment: Git Bash uses Bash, while
-PowerShell uses `pwsh` (or `powershell.exe` when `pwsh` is unavailable). Set
-`NIMLET_SHELL=bash`, `NIMLET_SHELL=pwsh`, or `NIMLET_SHELL=cmd.exe` to override
-that choice. POSIX shell scripts used as persistent extensions require Bash on
-Windows; PowerShell scripts and native `.exe` extensions are also supported.
+If your binary is not on `PATH`, replace `nimlet` in the examples with its
+path. Windows users can use the same command from PowerShell when the binary is
+on `PATH`.
 
 Store the provider credential in `~/.nimlet/auth.json`, or set its environment
 variable before starting the agent:
@@ -93,15 +39,15 @@ Optional project configuration is read from `.nimlet/config.json` in the
 workspace and overlays `~/.nimlet/config.json`. Global files live in
 `~/.nimlet/`:
 
-- `~/.nimlet/config.json` — default provider and model
-- `~/.nimlet/auth.json` — private provider credentials
-- `~/.nimlet/AGENTS.md` — personal instructions (all projects)
-- `~/.nimlet/skills/` — global skills
-- `~/.nimlet/prompts/` — global prompt templates
-- `~/.nimlet/extensions/` — global persistent extensions
-- `~/.nimlet/tools/` — global external tools
-- `~/.nimlet/sessions/` — saved sessions
-- `~/.nimlet/models-dev.json` — cached model metadata
+- `~/.nimlet/config.json` - default provider and model
+- `~/.nimlet/auth.json` - private provider credentials
+- `~/.nimlet/AGENTS.md` - personal instructions (all projects)
+- `~/.nimlet/skills/` - global skills
+- `~/.nimlet/prompts/` - global prompt templates
+- `~/.nimlet/extensions/` - global persistent extensions
+- `~/.nimlet/tools/` - global external tools
+- `~/.nimlet/sessions/` - saved sessions
+- `~/.nimlet/models-dev.json` - cached model metadata
 
 To use Anthropic, run `/provider anthropic`. The first switch selects
 `claude-sonnet-4-6`; subsequent switches restore your last model for that provider.
@@ -188,8 +134,8 @@ Provider blocks also accept an `options` object with native API request fields:
 Only the active provider's options are added to agent turn requests. Project
 configuration recursively overlays global configuration; switching providers
 selects that provider's options. Missing or `null` options mean no extra settings;
-other values must be JSON objects. These are native fields, not the camelCase
-fields of nimgent's typed Nim objects.
+other values must be JSON objects. These are provider-native fields, not fields
+from nimlet's higher-level configuration.
 
 An explicit `agent.thinking` setting (including `/thinking none`) replaces
 configured `reasoning`, `reasoning_effort`, and `thinking` blocks and the
@@ -198,9 +144,9 @@ through unchanged. Other settings remain intact. `/thinking` and `/model` saves
 preserve provider options. Connection probes and compaction keep their existing
 request settings.
 
-Run the built executable from the workspace you want the agent to modify:
-`./nimlet` on POSIX, `./nimlet.exe` from Git Bash, or `.\nimlet.exe` from
-PowerShell. The command-line examples below use the POSIX spelling.
+Run the installed executable from the workspace you want the agent to modify:
+`nimlet` on any platform where it is on `PATH`. If it is not on `PATH`, use the
+full path to the binary.
 
 While a turn is running, Enter queues a steering message for delivery after the
 current assistant tool batch, before the next model call. Alt+Enter queues a
@@ -211,11 +157,11 @@ composer. Alt+Up restores queued messages without interrupting the turn.
 Use `/settings` → `Queue` to choose `one-at-a-time` or `all` delivery
 independently for steering and follow-up queues.
 Pass a prompt on the command line for a one-shot turn that exits when
-done: `./nimlet fix the failing parser test`. Add `-i` /
+done: `nimlet fix the failing parser test`. Add `-i` /
 `--interactive` to run that prompt and then keep the REPL open.
 Use `-p` / `--print` for clean stdout containing only the final response.
 Piped stdin selects print mode automatically and is placed before an optional
-CLI instruction: `cat README.md | ./nimlet -p "Summarize this text"`.
+CLI instruction: `cat README.md | nimlet -p "Summarize this text"`.
 Startup overrides are ephemeral: `--provider NAME`, `--model ID`,
 `--thinking LEVEL`, `--api-key KEY`, and `--tools read,bash` (use
 `--tools none` to disable tools). `--no-session` keeps the transcript in
@@ -229,10 +175,12 @@ use `error` and `diagnostic`. The reserved queue record has `type`, `action`,
 `content`, and `depth`; one-shot JSON mode does not itself create a queue.
 The complete version 1 contract is in [docs/json.md](docs/json.md).
 Use `--mode rpc` for a long-running JSONL process that accepts correlated
-`prompt`, `interrupt`, `get_state`, and `shutdown` commands on stdin. It runs one
-turn with one queued prompt; see [docs/rpc.md](docs/rpc.md).
-The interactive TUI is built with nimterm. Reads, searches, and workspace edits
-run without prompts. Shell commands and extension tools ask on first use; press
+`prompt`, `steer`, `follow_up`, `interrupt`, `get_state`, queue, and `shutdown`
+commands on stdin. It supports separate steering and follow-up queues; see
+[docs/rpc.md](docs/rpc.md).
+The interactive TUI is available in the installed binary. Reads, searches, and
+workspace edits run without prompts. Shell commands and extension tools ask on
+first use; press
 `Enter` for once, `s` to allow the normalized command for the session, `p` to
 save that grant for the project, or `n` to deny. Use `/permissions` to inspect
 grants and `/permissions clear` to remove project grants.
@@ -252,8 +200,8 @@ Older sessions without provider metadata retain the currently selected provider.
 A session from another project still loads by ID,
 with a warning. Sessions without a workspace header are hidden from
 workspace-filtered lists. `/model name` switches the model for later turns.
-`./nimlet --resume` continues the latest session for this workspace.
-A specific session can be selected with `./nimlet --session ID`.
+`nimlet --resume` continues the latest session for this workspace. A specific
+session can be selected with `nimlet --session ID`.
 
 Use `/plan` for an opt-in, read-only investigation checkpoint and `/act` to enable
 implementation. Plan mode exposes targeted file/search tools, local Git history,
@@ -280,26 +228,26 @@ preserved beside the session as `<session>.jsonl.recovery-<timestamp>`.
 
 `/help` prints both the commands and this list in the TUI.
 
-- `Enter` — submit; while a turn is running, queue a steering message
-- `Alt+Enter` — queue a follow-up message while a turn runs
-- `Shift+Enter` / `Alt+J` — newline in the composer
-- `Shift+Tab` — toggle plan / act mode
-- `Esc` / `Ctrl-C` — interrupt a running turn and restore queued messages
-- `Alt+Up` — restore queued messages to the composer
-- `Ctrl-V` — paste text or a clipboard image
-- `Tab` / `Up` / `Down` — accept / move through suggestions
-- `Left`/`Right`, `Ctrl-B` — move the cursor by character
-- `Ctrl-F` — search the transcript
-- `Alt-B` / `Alt-F` — move the cursor by word
-- `Home`/`End`, `Ctrl-A`/`Ctrl-E` — jump to start / end of the line
-- `Up`/`Down`, `Ctrl-P`/`Ctrl-N` — history (and composer line up/down)
-- `Ctrl-G` — open the composer in `$VISUAL`, `$EDITOR`, or `nano`
-- `Ctrl-Z` — undo the last composer edit
-- `Ctrl-W` / `Alt-D` — delete the previous / next word; `Ctrl-Y` yanks it back
-- `!command` — run a shell command and send its output to the model
-- `!!command` — run a shell command without sending its output to the model
-- `Ctrl-O` — show or hide tool output and thinking details
-- `PgUp` / `PgDn` / mouse wheel — scroll the transcript
+- `Enter` - submit; while a turn is running, queue a steering message
+- `Alt+Enter` - queue a follow-up message while a turn runs
+- `Shift+Enter` / `Alt+J` - newline in the composer
+- `Shift+Tab` - toggle plan / act mode
+- `Esc` / `Ctrl-C` - interrupt a running turn and restore queued messages
+- `Alt+Up` - restore queued messages to the composer
+- `Ctrl-V` - paste text or a clipboard image
+- `Tab` / `Up` / `Down` - accept / move through suggestions
+- `Left`/`Right`, `Ctrl-B` - move the cursor by character
+- `Ctrl-F` - search the transcript
+- `Alt-B` / `Alt-F` - move the cursor by word
+- `Home`/`End`, `Ctrl-A`/`Ctrl-E` - jump to start / end of the line
+- `Up`/`Down`, `Ctrl-P`/`Ctrl-N` - history (and composer line up/down)
+- `Ctrl-G` - open the composer in `$VISUAL`, `$EDITOR`, or `nano`
+- `Ctrl-Z` - undo the last composer edit
+- `Ctrl-W` / `Alt-D` - delete the previous / next word; `Ctrl-Y` yanks it back
+- `!command` - run a shell command and send its output to the model
+- `!!command` - run a shell command without sending its output to the model
+- `Ctrl-O` - show or hide tool output and thinking details
+- `PgUp` / `PgDn` / mouse wheel - scroll the transcript
 
 Type `/help` at any prompt to see these in the running app.
 
@@ -409,3 +357,7 @@ While handling a request, an extension may ask the user and then continue:
 
 Nimlet replies with `{"type":"ui_response","id":"q1","answer":"staging","cancelled":false}`.
 Time spent waiting for the user does not count against the response timeout.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

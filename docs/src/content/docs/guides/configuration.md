@@ -25,8 +25,9 @@ Settings are merged key by key, and the project wins:
   the global entry of the same name.
 
 Startup flags are a third layer, for one process only: `--provider`, `--model`,
-`--thinking`, `--api-key`, and `--tools` override configuration and credentials
-and are never written back.
+`--thinking`, `--api-key`, and `--tools` override the corresponding settings
+and are never written back. `--approve` and `--no-approve` also choose whether
+project-local resources load for that process.
 
 A minimal global config:
 
@@ -53,11 +54,13 @@ the per-provider environment variable is used instead:
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `HYPER_API_KEY`, `MISTRAL_API_KEY`,
 `OPENCODE_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`. Exporting the
 variable is enough; no configuration needed. For the Gemini API,
-`GOOGLE_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` work too — nimlet takes the
+`GOOGLE_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` work too - nimlet takes the
 first of the three that is set.
 
-`--api-key` is an in-memory override for one process. `/doctor` reports whether
-the credential comes from `auth.json` or the environment, never the value.
+`--api-key` is an in-memory override for one process. Codex uses its Codex App
+Server login instead of an API key. `/doctor` reports whether the selected
+credential comes from `auth.json`, the environment, the command line, or Codex
+App Server, never the value.
 
 ## Provider settings
 
@@ -69,7 +72,7 @@ Everything under `providers.<name>`, where `<name>` is `anthropic`, `codex`,
 | `endpoint` | Override the base URL, for a proxy or gateway |
 | `site_url`, `site_name` | Attribution headers, for providers that want them |
 | `options` | Native API request fields, merged into each request |
-| `last_model` | Written by `/model` when you switch models |
+| `last_model` | The remembered model for this provider, written when you switch models |
 
 `options` are passed through as-is, so they are the provider's own field names,
 not nimlet's:
@@ -88,7 +91,7 @@ not nimlet's:
 ```
 
 Only the active provider's options are sent. A missing or `null` value means
-nothing extra, and anything else has to be a JSON object — a string or an array
+nothing extra, and anything else has to be a JSON object - a string or an array
 makes the request fail with `options must be a JSON object`.
 
 One interaction worth knowing: if you set `agent.thinking`, it replaces any
@@ -119,7 +122,7 @@ Two notes:
 
 - `thinking` and the queue modes are validated, and only accept the values listed.
 - `NIMLET_THINKING` overrides `agent.thinking` for a run, which is handy for a
-  one-off `NIMLET_THINKING=high ./nimlet …`.
+  one-off `NIMLET_THINKING=high nimlet`.
 
 ## Theme and keybindings
 
@@ -153,12 +156,12 @@ check `/doctor` to confirm which files were read.
 
 ## What nimlet writes, and where
 
-Five commands save settings immediately:
+These commands save settings immediately:
 
 | Command | Keys written |
 | --- | --- |
 | `/model` | `default_model`, and `providers.<active>.last_model` |
-| `/provider` | `default_provider` |
+| `/provider` | `default_provider`, `default_model`, and remembered provider models |
 | `/thinking` | `agent.thinking` (removed when you clear it) |
 | `/web on` / `/web off` | `agent.web_search` (removed when off) |
 | `/theme` | `theme` |
@@ -199,8 +202,8 @@ Use /doctor test for a small API request to the selected provider.
 ```
 
 The endpoint is printed without credentials or query parameters. `/doctor test`
-makes one small request and reports success or failure — useful when a key, an
-endpoint, or a model id is the suspect.
+makes one small request and reports success or failure, which is useful when a
+key, endpoint, or model id is the suspect.
 
 ## A complete example
 

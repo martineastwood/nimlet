@@ -23,7 +23,7 @@ The project roots are only searched when you have trusted the project. Your own
 `~/.agents/prompts` and `~/.nimlet/prompts` are always available.
 
 Discovery is flat: only `*.md` files directly inside a prompts directory count.
-Subdirectories are not walked, so grouping templates into folders is not a thing —
+Subdirectories are not walked, so grouping templates into folders is not a thing -
 use a filename prefix like `db-migrate.md` instead.
 
 The filename, minus `.md`, is the command name exactly: `review.md` gives you
@@ -57,7 +57,7 @@ no quoting, escaping, or shell interpretation. If you use `$ARGUMENTS` inside a
 code block in the body, it is replaced there too.
 
 With no arguments the placeholders become empty, which usually reads awkwardly. If
-a template only makes sense with input, say so in the body — for example, "If no
+a template only makes sense with input, say so in the body - for example, "If no
 focus is given, review the whole diff."
 
 ## Frontmatter and the command name
@@ -90,7 +90,7 @@ For a bare `/name`, nimlet resolves in this order:
 3. prompt templates
 
 That means built-in names are reserved. A `prompts/plan.md` never runs, and it is
-not even offered in completions — the built-in `/plan` wins and the file is
+not even offered in completions - the built-in `/plan` wins and the file is
 silently ignored. Rename it to `/plan-fix` or similar. The same applies if an
 extension registers a command with the same name as your template.
 
@@ -119,7 +119,7 @@ and `/skill:review`.
 | Something that must actually run | An extension |
 
 Templates are yours to send; skills are the model's to load. When you notice
-yourself typing the same paragraphs twice, a template is usually the fix — and
+yourself typing the same paragraphs twice, a template is usually the fix - and
 when you notice the model reaching for the wrong procedure, that is a skill
 description to sharpen.
 

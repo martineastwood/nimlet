@@ -10,7 +10,7 @@ and react to what happens in the session: tool calls, turns starting and
 finishing, compaction, sessions opening and closing.
 
 The difference from a `tool.json` tool: a tool is spawned per call with one JSON
-argument and one JSON result, then exits. An extension is a conversation — it
+argument and one JSON result, then exits. An extension is a conversation - it
 starts once, gets told about events, and can push updates whenever it likes.
 
 ## Layout and discovery
@@ -58,12 +58,13 @@ Tell the extension to run itself rather than naming an interpreter:
 {"name": "notes", "command": ["./extension.py"]}
 ```
 
-Only the first element of `command` is resolved against the extension folder, so
-`["python3", "./extension.py"]` would look for the script in your workspace
-instead. Make the file executable and give it a shebang, and
-`"command": ["./extension.py"]` works everywhere. On Windows, `.sh`, `.ps1`,
-`.cmd`, and `.bat` files are launched through the matching interpreter, so the
-same manifest can work on every platform.
+Only the first element of `command` is resolved against the extension folder
+when it contains `/`, so `["python3", "./extension.py"]` would look for the
+script in your workspace instead. On POSIX, make the file executable and give it
+a shebang, and `"command": ["./extension.py"]` works. On Windows, use a
+`.cmd` wrapper, or pass a workspace-relative script path to an interpreter, for
+example `["python", ".nimlet/extensions/notes/extension.py"]`. `.sh`, `.ps1`,
+`.cmd`, and `.bat` files are launched through the matching interpreter.
 
 A manifest that does not parse, or is missing `name` or `command`, is skipped
 with a startup warning such as `skipping /path: missing name`. Nothing crashes.
@@ -261,7 +262,7 @@ then `/reload`, and `/todos` works. A few notes for this style of extension:
 - **`capabilities: ['read']` is what puts `list_todos` in plan mode.** The `/todos`
   command needs no switch, because commands are yours to run, not the model's.
 - **Windows cannot launch a `.mjs` directly.** Add a one-line wrapper and point the
-  manifest at it — the runtime launches `.cmd` and `.bat` files through `cmd.exe`:
+  manifest at it - the runtime launches `.cmd` and `.bat` files through `cmd.exe`:
 
   ```bat title=".nimlet/extensions/todos/extension.cmd"
   @echo off
@@ -272,7 +273,7 @@ then `/reload`, and `/todos` works. A few notes for this style of extension:
   and point `command` at the compiled entry point. The manifest never knows which
   language answers, which is why the protocol is worth learning once.
 - **Your extension runs with the workspace as its current directory**, so
-  `child_process` can drive your existing tooling — `execFile('npx', ['tsc',
+  `child_process` can drive your existing tooling - `execFile('npx', ['tsc',
   '--noEmit'])` inside a tool handler is a perfectly normal extension. Nothing
   prompts for approval there: extensions are programs you installed, which is why
   the project trust question exists.
@@ -316,7 +317,7 @@ where the tool is available, and how it is treated. The values are:
 
 A tool whose capabilities are only `read` and/or `user` is offered in plan mode as
 well as act mode. Anything else, including a manifest that lists no capabilities at
-all — that counts as `write`, `shell`, and `network` — stays act-only. Both cases
+all - that counts as `write`, `shell`, and `network` - stays act-only. Both cases
 still ask for approval the first time.
 
 Two constraints sit on top of that. A tool whose name collides with a built-in is
@@ -352,12 +353,12 @@ The reason reaches the model as the tool result, so it understands why. A
 `tool_call` reply can also rewrite the call before it runs:
 
 ```json
-{"type":"response","id":"9","arguments":{"path":"src/main.nim"}}
+{"type":"response","id":"9","arguments":{"path":"src/main.py"}}
 ```
 
 Failures are fail-open: if an extension crashes, times out, or replies with
 something malformed, nimlet reports a warning and the session continues without
-its contribution. Register only the events you need — every event you list is a
+its contribution. Register only the events you need - every event you list is a
 round trip the turn waits on, so a hook that only matters occasionally still costs
 a message per tool call.
 
@@ -430,7 +431,7 @@ both use a key called `state` without colliding.
 
 `entry` data is durable: it is stored in the session file and comes back when the
 session is resumed. It is never sent to the model, so it is the right place for
-bookkeeping a compiled-in extension needs to reload later — an external process
+bookkeeping a compiled-in extension needs to reload later - an external process
 reads its own state from disk.
 
 ## Asking the user

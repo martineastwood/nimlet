@@ -4,7 +4,7 @@ description: Every slash command and keyboard shortcut.
 ---
 
 Slash commands are typed in the composer and start with `/`. They configure
-nimlet, manage sessions, and inspect state — they never become a message to the
+nimlet, manage sessions, and inspect state - they never become a message to the
 model, with two exceptions described under "Dispatch" below.
 
 `/help` prints the same list inside the app, built from the same table this page
@@ -59,7 +59,8 @@ uses the local Codex App Server; `/models refresh` loads its model list and
   something is up to the model.
 - `/provider` alone prints the active provider. `/provider <name>` accepts
   `anthropic`, `codex`, `google`, `hyper`, `mistral`, `openai`, `opencode`,
-  `opencodezen`, or `openrouter`, and selects that provider's last model.
+  `opencodezen`, or `openrouter`, selects that provider's last model, and saves
+  the provider, model, and remembered model choices.
 - `/web` shows whether hosted search is available. `/web on` enables it for
   providers that support it; it is only offered to the model in act mode.
 
@@ -101,8 +102,9 @@ uses the local Codex App Server; `/models refresh` loads its model list and
   state is never written to disk.
 - `/trust` says `No project-local resources require trust.` when the project ships
   nothing, and otherwise reports trusted or not trusted. `/trust on` and
-  `/trust off` take effect immediately, rescanning tools, skills, prompts, and
-  extensions.
+  `/trust off` take effect immediately for tools, skills, prompts, extensions,
+  and system prompt files. Project config values are loaded at startup, so
+  restart to apply a trust change to configuration.
 - `/permissions` lists grants, project first. `/permissions clear` removes the
   project ones from `.nimlet/permissions.json`.
 
@@ -147,7 +149,7 @@ Details for all three are in [Security](/guides/security/) and
 ## Dispatch: which command wins
 
 The first word decides. Built-in names are matched exactly, so type them in
-lowercase as shown — `/Model` is not a built-in. If the name is not built in,
+lowercase as shown - `/Model` is not a built-in. If the name is not built in,
 nimlet looks in this order:
 
 1. extension commands (case-insensitive)

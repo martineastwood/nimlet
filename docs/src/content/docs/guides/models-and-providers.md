@@ -4,24 +4,28 @@ description: Switching provider and model, thinking levels, and hosted web searc
 ---
 
 nimlet talks to one provider at a time. A provider is where requests go and
-which key signs them; a model is the id you ask for there. Everything else — your
-config, your sessions, your instructions — stays the same when you switch.
+which key signs them; a model is the id you ask for there. Everything else - your
+config, your sessions, your instructions - stays the same when you switch.
 
 ## The wired providers
 
 | Provider | Default model | Key variable | Endpoint |
 | --- | --- | --- | --- |
 | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` |
-| `codex` | — | — | — |
+| `codex` | `gpt-5` | Codex App Server login | Local Codex App Server |
 | `google` | `gemini-3.5-flash-lite` | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` |
 | `hyper` | `deepseek-v4-flash` | `HYPER_API_KEY` | `https://hyper.charm.land/v1/chat/completions` |
-| `mistral` | — | — | — |
+| `mistral` | `mistral-vibe-cli-with-tools` | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1/chat/completions` |
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` |
 | `opencode` | `deepseek-v4.1-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/go/v1/chat/completions` |
 | `opencodezen` | `deepseek-v4-flash` | `OPENCODE_API_KEY` | `https://opencode.ai/zen/v1/chat/completions` |
 | `openrouter` | `deepseek/deepseek-v4-flash-0731` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1/chat/completions` |
 
-`google` is the Gemini API — the key-based service you get from Google AI Studio
+`codex` connects to the `codex app-server` command on your PATH. Use `/login`
+to sign in through ChatGPT, then `/provider codex`. `/models refresh` asks the
+App Server for its available models.
+
+`google` is the Gemini API - the key-based service you get from Google AI Studio
 (`generativelanguage.googleapis.com`). It is not Vertex AI, which is a different
 host, a different path (`projects/<project>/locations/<location>/…`), and
 different auth (a service account, not an API key); supporting it would be a
@@ -29,14 +33,11 @@ provider of its own. The env var is `GEMINI_API_KEY`, and `GOOGLE_API_KEY` and
 `GOOGLE_GENERATIVE_AI_API_KEY` are accepted as well, so whichever one you already
 export works.
 
-`opencode` is the paid OpenCode Go subscription, `opencodezen` the pay-per-use
-OpenCode Zen catalog. Both are signed with the same `OPENCODE_API_KEY` — the Go
-subscription and Zen balance live on the same OpenCode account. Both gateways
-serve a model on its own wire format; nimlet routes each model by its models.dev
-catalog entry and falls back to Chat Completions, so model ids need no
-per-format setup. That includes the gateway's Gemini models, which go to the
-native Google endpoint under the same base and keep their own features, hosted
-search among them.
+`opencode` and `opencodezen` use `OPENCODE_API_KEY`. Nimlet routes those models
+using their models.dev catalog entry and falls back to Chat Completions when the
+catalog does not specify another wire format. Zen Gemini models can use hosted
+search when the catalog identifies the model as a Google model and the gateway
+endpoint can be mapped to the native Google request.
 
 Those are the defaults when your config says nothing: with the matching
 environment variable set, `nimlet` starts against OpenRouter and
@@ -46,10 +47,11 @@ environment variable set, `nimlet` starts against OpenRouter and
 /provider anthropic
 ```
 
-switches provider, and picks that provider's last model — the one you used before,
+switches provider, and picks that provider's last model - the one you used before,
 remembered in `providers.anthropic.last_model`. Switching back and forth therefore
-costs one command, not two. `/provider` alone prints the active name, and the
-choice is saved as `default_provider` in your config.
+costs one command, not two. `/provider` alone prints the active name, and
+switching saves the provider, current model, and remembered model choices in your
+config.
 
 `--provider NAME` does the same for one run, without saving.
 
@@ -68,7 +70,7 @@ so `/model claude` gives you the Claude models the catalog knows about.
 A model id is whatever the provider calls it. On OpenRouter that is usually
 `vendor/model`; on the first-party providers it is the bare id. nimlet does not
 translate ids between providers, and it will not stop you from typing one that
-does not exist — the first request is what tells you.
+does not exist - the first request is what tells you.
 
 `--model ID` overrides for a single run. `--api-key KEY` and `--thinking LEVEL`
 do the same for their settings.
@@ -134,10 +136,9 @@ Two wires exist behind those levels, chosen by the model:
   `max`. `minimal` is folded into `low`, and `xhigh` falls back to `max` where it
   is not offered. These use adaptive thinking with a summarized display, so
   `agent.max_tokens` is the combined cap on thinking plus answer.
-- **Legacy budgets (older models).** Reasoning is enabled with a token budget:
-  1024 for `minimal` up to 32000 for `xhigh`/`max`. The budget is added once to
-  your answer allowance, so a `high` setting with `max_tokens: 4096` sends
-  `max_tokens: 20096` for that request.
+- **Budget-based reasoning (older models).** Nimlet maps the selected level to
+  the provider's supported token-budget format. That budget is added once to
+  the answer allowance for the request. The exact budget is provider-specific.
 
 Two details worth knowing:
 
@@ -145,7 +146,7 @@ Two details worth knowing:
   `reasoning_effort`, or `thinking` block and `output_config.effort` in your
   provider options. Other options are left alone. This avoids two sources of truth
   fighting over the same field.
-- `NIMLET_THINKING=high ./nimlet` overrides the config for one run, which is handy
+- `NIMLET_THINKING=high nimlet` overrides the config for one run, which is handy
   when you want to try a level without saving it.
 
 A model can also require thinking. On those, `/thinking none` resolves to
@@ -203,7 +204,7 @@ is the authority, and models missing from the catalog show no cost at all.
 ## Where choices are saved
 
 `/model`, `/provider`, `/thinking`, `/web`, and `/theme` write to your config
-immediately — the project config if the project is trusted and has a `.nimlet`
+immediately - the project config if the project is trusted and has a `.nimlet`
 directory, otherwise the global one. That is why a model you picked last week is
 already selected today.
 

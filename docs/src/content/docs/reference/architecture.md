@@ -3,28 +3,64 @@ title: Architecture
 description: The constraints nimlet is built around.
 ---
 
-:::caution[Placeholder]
-This page is a stub. Content is planned but not written yet.
-:::
+Nimlet is a local coding agent with a small runtime surface. This matters when
+you are deciding how to use it in your development workflow or connect it to
+your own software.
 
-## Planned content
+## Work happens in response to events
 
-Distilled from `SCOPE.md`, the design document behind the project.
+When nimlet is idle, it waits for terminal input, process output, or an operating
+system signal. During a turn, model streaming, tool output, queued messages,
+and terminal redraws are handled as the corresponding events arrive.
 
-- The guiding rule: nothing happens unless the user, model, subprocess, or OS
-  generates an event
-- Idle is blocking I/O; active is proportional to real work — no polling, no
-  timers, no fixed-frequency render loops, no background threads
-- Lazy cost: features not in use consume effectively zero CPU and no processes
-- Prompt-cache design: stable prefix ordering (system, tools, instructions,
-  skill metadata, compaction summary, history, latest content), deterministic
-  tool ordering, no volatile data early
-- Agent loop shape: read input, append, build request, stream, run tools,
-  repeat — no hidden scheduler
-- Append-only JSONL sessions and why they were chosen
-- Unix-style extension boundary (subprocess, JSON on stdin/stdout)
-- Explicit non-goals: repository indexing, LSP, MCP, subagents, watchers,
-  embedded scripting runtimes, daemons
-- Resource regression stance: performance regressions are bugs
-  (`nimble idleSmoke`, `NIMTERM_PERF=1`)
-- How to measure it yourself
+This makes unused features cheap: external tools are not started until called,
+and model metadata is refreshed in the background rather than being required
+before the first turn.
+
+## A turn is incremental
+
+For each turn, nimlet builds a provider request, streams the response, runs any
+tool calls, and builds the next request until the model finishes or the run is
+interrupted. Read, grep, glob, and read_skill calls can run in parallel when a
+response requests more than one of them. Other calls run with their normal
+ordering and permission behavior.
+
+The request keeps stable instructions and tool definitions ahead of changing
+conversation content. Sessions and compaction preserve enough structure for a
+long conversation to continue without rewriting the original transcript.
+
+## Sessions are append-only
+
+Saved sessions are JSONL files. Each completed message, tool result, compaction,
+and extension entry is appended and flushed. A damaged final line can be
+recovered on the next append, while an interrupted tool call is recorded as an
+unknown error and is never rerun automatically. See
+[Sessions](/guides/sessions/) for the file format and recovery behavior.
+
+## Extensions are processes
+
+Persistent extensions are separate programs communicating with nimlet through
+JSONL over stdin and stdout. They can register commands, tools, and lifecycle
+events, then send status, widget, notification, or session entry updates. An
+external `tool.json` tool uses the same process boundary for one call and exits.
+See [External tools](/guides/external-tools/) and
+[Extensions and hooks](/guides/extensions-and-hooks/) when you want to add
+your own integration.
+
+## Scope
+
+The application focuses on streaming model calls, local tools, sessions,
+instructions, extensions, and terminal interaction. It does not build a
+repository index, LSP, daemon, embedded scripting runtime, or background agent
+pool. Use the shell or an external tool when a task needs one of those systems.
+
+## Choose an integration surface
+
+- Use the interactive TUI for hands-on work.
+- Use [print mode](/guides/quickstart/) when a script needs only the final text.
+- Use [JSON mode](/reference/json-mode/) when your program consumes one streamed
+  turn.
+- Use [RPC mode](/reference/rpc-mode/) when your program needs a long-running
+  process with queues and correlated commands.
+- Use [external tools](/guides/external-tools/) for short-lived executables, or
+  [extensions](/guides/extensions-and-hooks/) for a process that stays connected.

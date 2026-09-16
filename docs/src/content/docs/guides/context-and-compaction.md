@@ -85,7 +85,7 @@ to the start of the user message that owns that region, so an assistant reply an
 its tool results are never separated from the request that produced them.
 
 ```text
-  turns 1–40                              turns 41–52
+  turns 1-40                              turns 41-52
 ┌───────────────┐───────────────────────┌───────────────────┐
 │   summarized  │                       │  kept verbatim    │
 └───────────────┘───────────────────────└───────────────────┘
@@ -157,7 +157,7 @@ compacts with an instruction that prioritizes recovering, rebuilds the request,
 and retries once:
 
 ```text
-Context overflow — compacting and retrying…
+Context overflow - compacting and retrying…
 ```
 
 If it overflows again, you get the provider's error and can compact manually or
