@@ -5,7 +5,7 @@
 ## edit tool's `lines:` report when present; `write` numbers from 1.
 
 import std/[json, strutils]
-import nimterm/theme
+import nimterm/[style, theme]
 
 type HunkSpan* = tuple[oldStart, oldEnd, newStart, newEnd: int]
 
@@ -82,4 +82,4 @@ proc formatToolHunk*(name: string, input: JsonNode, useColor: bool,
   for e in entries:
     let body = hunkLine(e, width)
     let color = if e.minus: t.error else: t.success
-    result.add (if useColor and color.len > 0: color & body else: body)
+    result.add (if useColor: color.ansi & body else: body)

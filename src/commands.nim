@@ -12,7 +12,7 @@ import models_dev
 import workspace
 import images
 import nimgent
-import nimterm/theme
+import themes
 
 type
   SlashKind* = enum

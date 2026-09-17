@@ -7,6 +7,7 @@ import ../src/session
 import ../src/session_export
 import ../src/config
 import ../src/trust
+import ../src/themes
 import ../src/agent
 import ../src/events
 import nimterm/markdown
@@ -66,14 +67,12 @@ method readEvent(backend: DecoderBackend, timeoutMs: int): UiEvent =
     return UiEvent(kind: uiResize, width: backend.dimensions.w,
       height: backend.dimensions.h)
   var input = backend.decoder.nextEvent(backend.nowMs)
-  if input.key == keyNone and input.mouse == mouseNone and
-      input.scrollDelta == 0 and input.focus == focusNone and
-      backend.chunks.len > 0:
+  if input.kind == uiNone and backend.chunks.len > 0:
     backend.decoder.feed(backend.chunks[0])
     backend.chunks.delete(0)
     input = backend.decoder.nextEvent(backend.nowMs)
   inc backend.nowMs
-  input.toUiEvent(backend.dimensions.w, backend.dimensions.h)
+  input
 
 method present(backend: DecoderBackend, frame: Canvas) = backend.frame = frame
 
@@ -4764,38 +4763,29 @@ suite "cli prompt args":
     check "Unknown option" in cli.error
 
 suite "themes":
-  test "dark 256 matches historical SGR":
-    check Dark256.accent == "\e[36m"
-    check Dark256.panelBg == "\e[48;5;236m"
-    check Dark256.selectedBg == "\e[48;5;81m"
-    check Dark256.selectedFg == "\e[30m"
-    check Dark256.boldAccent == "\e[1;36m"
-    check Dark256.heading == "\e[1;34m"
-    check Dark256.dim == "\e[2m"
-    check Dark256.text == "\e[37m"
+  test "dark 256 compiles to semantic styles":
     let compiled = compileNamedTheme("dark", cd256)
     check compiled.ok
-    check compiled.theme.accent == Dark256.accent
-    check compiled.theme.panelBg == Dark256.panelBg
+    check compiled.theme.accent.ansi == "\e[36m"
+    check compiled.theme.panelBg.ansi == "\e[48;5;236m"
 
   test "truecolor hex compiles to 38;2":
     let t = compileTheme(DarkSpec, cdTrue)
-    check "38;2;" in t.accent
-    check "48;2;" in t.panelBg
-    check t.dim == "\e[2m"
-    check t.reset == "\e[0m"
+    check "38;2;" in t.accent.ansi
+    check "48;2;" in t.panelBg.ansi
+    check t.dim.ansi == "\e[2m"
 
   test "depth none strips color":
     let t = compileTheme(DarkSpec, cdNone)
-    check t.accent.len == 0
-    check t.panelBg.len == 0
+    check t.accent == defaultStyle()
+    check t.panelBg == defaultStyle()
     check not t.colorsOn
 
   test "16-color drops panels":
     let t = compileTheme(DarkSpec, cd16)
-    check t.accent.len > 0
-    check t.panelBg.len == 0
-    check t.selectedBg.len == 0
+    check t.accent != defaultStyle()
+    check t.panelBg == defaultStyle()
+    check t.selectedBg == defaultStyle()
 
   test "json theme loads required tokens":
     let root = freshDir()
@@ -4828,7 +4818,7 @@ suite "themes":
       nimletConfigDir())
     check compiled.ok
     check compiled.theme.name == "seafoam"
-    check "38;2;" in compiled.theme.accent
+    check "38;2;" in compiled.theme.accent.ansi
     check "seafoam" in listThemeNames(root, ".nimlet", nimletConfigDir())
 
   test "json rejects missing token and unknown name":

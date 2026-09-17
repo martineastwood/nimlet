@@ -2,8 +2,9 @@ import std/[asyncdispatch, json, os, sequtils, strutils]
 import nimgent
 import config, agent, session, hooks, events, rpc, trust, models_dev
 import shell
+import themes
 import ui/[console, nimterm_preview, turn]
-import nimterm/[term, theme]
+import nimterm/[style, term, theme]
 
 type
   CliArgs* = object
@@ -168,7 +169,7 @@ proc printMode*(cli: CliArgs, stdinIsTty: bool): bool =
 
 proc printStartupBanner(agent: Agent, catalogNote: string) =
   let t = currentTheme
-  echo t.paint("\e[1m", "nimlet coding agent")
+  echo t.paint(defaultStyle().withAttribute(attrBold), "nimlet coding agent")
   echo t.paint(t.dim, "Provider: " & agent.config.provider & "  Model: " & agent.config.model)
   echo t.paint(t.dim, "Workspace: " & agent.config.workspace)
   echo t.paint(t.dim, "Session: " & agent.session.id)

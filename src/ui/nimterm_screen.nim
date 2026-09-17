@@ -52,7 +52,7 @@ const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "
 
 proc accentCursorStyle(t: Theme): Style =
   ## Reverse the accent so the caret stays a visible block over existing text.
-  t.themedStyle(t.accent, "", {attrBold}).withAttribute(attrReverse)
+  t.accent.withAttribute(attrBold).withAttribute(attrReverse)
 
 method focusable*(screen: NimtermScreen): bool = true
 
@@ -108,17 +108,16 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
                        modelPicker: ModelPicker, sessionId = "",
                        keybindings: JsonNode = nil): NimtermScreen =
   let t = currentTheme
-  let panelStyle = t.themedStyle(t.text, t.panelBg)
-  let composerStyle = t.themedStyle(t.text)
-  let composerAccentStyle = t.themedStyle(t.accent, "", {attrBold})
-  let selectedStyle = t.themedStyle(t.selectedFg, t.selectedBg, {attrBold})
-  let descriptionStyle = t.themedStyle(t.muted, t.panelBg)
+  let panelStyle = t.text.overlay(t.panelBg)
+  let composerStyle = t.text
+  let composerAccentStyle = t.accent.withAttribute(attrBold)
+  let selectedStyle = t.selectedFg.overlay(t.selectedBg).withAttribute(attrBold)
+  let descriptionStyle = t.muted.overlay(t.panelBg)
   result = NimtermScreen(
     header: newCard("nimlet coding agent", headerBody,
-      t.themedStyle(t.muted), t.themedStyle(t.muted),
-      t.themedStyle(t.text, "", {attrBold})),
+      t.muted, t.muted, t.text.withAttribute(attrBold)),
     menu: newMenu(@[], panelStyle, selectedStyle, "Commands", true,
-      t.themedStyle(t.accent), t.themedStyle(t.heading), descriptionStyle,
+      t.accent, t.heading, descriptionStyle,
       selectedStyle),
     transcript: newTranscriptWidget(),
     composer: newInput(style = composerStyle, prefixStyle = composerAccentStyle,
@@ -152,6 +151,7 @@ proc newNimtermScreen*(headerBody, workspace, sessionDir: string,
     if hunk.len == 0: return
     result = @[input.getOrDefault("path").getStr]
     result.add hunk
+  result.transcript.formatToolLine = formatToolOutputLine
   result.historyIndex = -1
   result.id = "screen"
   result.header.id = "header"
@@ -282,39 +282,37 @@ proc refreshMenuTheme(screen: NimtermScreen) =
     screen.themeName = t.name
   screen.appliedThemeRevision = themeRevision
   screen.stylesReady = true
-  screen.header.style = t.themedStyle(t.muted)
-  screen.header.borderStyle = t.themedStyle(t.muted)
-  screen.header.titleStyle = t.themedStyle(t.text, "", {attrBold})
-  screen.menu.style = t.themedStyle(t.text, t.panelBg)
-  screen.menu.selectedStyle = t.themedStyle(t.selectedFg, t.selectedBg, {attrBold})
-  screen.menu.descriptionStyle = t.themedStyle(t.muted, t.panelBg)
+  screen.header.style = t.muted
+  screen.header.borderStyle = t.muted
+  screen.header.titleStyle = t.text.withAttribute(attrBold)
+  screen.menu.style = t.text.overlay(t.panelBg)
+  screen.menu.selectedStyle = t.selectedFg.overlay(t.selectedBg).withAttribute(attrBold)
+  screen.menu.descriptionStyle = t.muted.overlay(t.panelBg)
   screen.menu.selectedDescriptionStyle = screen.menu.selectedStyle
-  screen.menu.borderStyle = t.themedStyle(t.accent)
-  screen.menu.titleStyle = t.themedStyle(t.heading)
-  screen.composer.style = t.themedStyle(t.text)
-  screen.searchInput.style = t.themedStyle(t.text)
-  let composerAccentStyle = t.themedStyle(t.accent, "", {attrBold})
+  screen.menu.borderStyle = t.accent
+  screen.menu.titleStyle = t.heading
+  screen.composer.style = t.text
+  screen.searchInput.style = t.text
+  let composerAccentStyle = t.accent.withAttribute(attrBold)
   screen.composer.prefixStyle = composerAccentStyle
   screen.composer.cursorStyle = accentCursorStyle(t)
   screen.composer.cursorBarStyle = composerAccentStyle
   screen.searchInput.prefixStyle = composerAccentStyle
   screen.searchInput.cursorStyle = accentCursorStyle(t)
   screen.searchInput.cursorBarStyle = composerAccentStyle
-  screen.transcript.userStyle = t.themedStyle(t.muted)
-  screen.transcript.assistantStyle = t.themedStyle(t.text)
-  screen.transcript.thinkingStyle = t.themedStyle(t.muted, "",
-    {attrDim, attrItalic})
-  screen.transcript.toolStyle = t.themedStyle(t.text)
-  screen.transcript.errorStyle = t.themedStyle(t.error, "", {attrBold})
-  screen.transcript.userRailStyle = t.themedStyle(t.accent, t.panelBg, {attrBold})
+  screen.transcript.userStyle = t.muted
+  screen.transcript.assistantStyle = t.text
+  screen.transcript.thinkingStyle = t.muted.withAttribute(attrDim).withAttribute(attrItalic)
+  screen.transcript.toolStyle = t.text
+  screen.transcript.errorStyle = t.error.withAttribute(attrBold)
+  screen.transcript.userRailStyle = t.accent.overlay(t.panelBg).withAttribute(attrBold)
   screen.transcript.assistantRailStyle = defaultStyle()
   screen.transcript.thinkingRailStyle = defaultStyle()
-  screen.transcript.toolRailStyle = t.themedStyle(t.muted)
+  screen.transcript.toolRailStyle = t.muted
   screen.transcript.errorRailStyle = defaultStyle()
   screen.headerSelectionStyle = screen.menu.selectedStyle
-  screen.transcript.selectionStyle = t.themedStyle(t.selectedFg, t.selectedBg,
-    {attrBold})
-  screen.transcript.searchStyle = t.themedStyle(t.selectedFg, t.selectedBg)
+  screen.transcript.selectionStyle = t.selectedFg.overlay(t.selectedBg).withAttribute(attrBold)
+  screen.transcript.searchStyle = t.selectedFg.overlay(t.selectedBg)
 
 proc headerSessionText(screen: NimtermScreen): string =
   if screen.headerSelectionStart < 0 or screen.headerSelectionEnd < 0:
@@ -726,7 +724,7 @@ method paint*(screen: NimtermScreen, canvas: var Canvas) =
         defaultStyle(), w)
     if activityRows > 0:
       canvas.writeAnsiText(0, activityTop, screen.activityLine(), defaultStyle(), w)
-    let ruleStyle = currentTheme.themedStyle(currentTheme.muted, "", {attrDim})
+    let ruleStyle = currentTheme.muted.withAttribute(attrDim)
     canvas.writeText(0, inputTop, "─".repeat(w), ruleStyle, w)
     activeInput.render(canvas, rect(0, inputTop + inputRuleRows, w, inputRows))
   if not screen.questionWidget.isNil:

@@ -19,6 +19,7 @@ import ui/turn
 import permissions
 import trace_metrics
 import codex_app_server
+import themes
 
 const baseSystemPrompt = """
 You are Nimlet, a coding agent working with the user in their workspace.

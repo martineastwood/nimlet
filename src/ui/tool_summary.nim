@@ -1,6 +1,28 @@
 ## Compact display-only summaries for verbose read-only tool results.
 
 import std/[json, sequtils, strutils]
+import nimterm/theme
+
+proc formatToolOutputLine*(name, line: string): string =
+  let t = currentTheme
+  if name == "grep":
+    let first = line.find(':')
+    let second = line.find(':', first + 1)
+    if first > 0 and second > first + 1 and
+        line[first + 1 ..< second].allCharsInSet({'0' .. '9'}):
+      return t.paint(t.muted, line[0 .. second]) &
+        (if second + 1 < line.len: line[second + 1 .. ^1] else: "")
+  elif name == "read":
+    if line.startsWith("path: ") or line.startsWith("version: ") or
+        line.startsWith("lines: "):
+      return t.paint(t.muted, line)
+    let separator = line.find(" | ")
+    if separator > 0 and line[0 ..< separator].strip.allCharsInSet({'0' .. '9'}):
+      return t.paint(t.muted, line[0 .. separator + 2]) &
+        (if separator + 3 < line.len: line[separator + 3 .. ^1] else: "")
+  elif name == "glob":
+    return t.paint(t.muted, line)
+  line
 
 proc inputText(input: JsonNode, key: string): string =
   let value = input.getOrDefault(key)

@@ -35,7 +35,7 @@ proc printToolResult*(output: string, isError: bool,
       parseHunkSpans(output))
     if hunk.len > 0:
       stdout.write hunk.join("\n")
-      if t.colorsOn: stdout.write t.reset
+      if t.colorsOn: stdout.write "\e[0m"
       stdout.write "\n\n"
       stdout.flushFile()
       return
