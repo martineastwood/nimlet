@@ -5,12 +5,29 @@
 ## Lookup order is handled by config.effectiveContextWindow:
 ## config override → models.dev → name heuristic.
 
-import std/[asyncdispatch, httpclient, json, os, strutils, times]
+import std/[asyncdispatch, httpclient, json, os, streams, strutils, tables, times]
 import nimgent
 
-type CatalogIndexEntry = object
-  provider, id, idLower: string
-  context: int
+type
+  ModelCost* = object
+    found*: bool
+    input*: float    ## USD per 1M tokens
+    output*: float
+    cacheRead*: float
+    cacheWrite*: float
+
+  CatalogIndexEntry = object
+    provider, id, idLower: string
+    context: int
+    reasoning, toggle, budgetTokens, acceptsImages: bool
+    efforts: seq[string]
+    npm: string
+    cost: ModelCost
+
+  CatalogSnapshot = object
+    valid: bool
+    entries: seq[CatalogIndexEntry]
+    exact, lower: Table[string, int]
 
 const
   modelsDevUrl* = "https://models.dev/api.json"
@@ -18,12 +35,13 @@ const
   catalogStaleSeconds* = 24 * 60 * 60
 
 var
-  gCatalog: JsonNode
   gCatalogPath = ""
   gLoadedAt = 0.0
   gForcePath = ""  ## tests: pin cache file / skip network when pre-seeded
+  gCatalogLoaded = false
   gCatalogIndex: seq[CatalogIndexEntry]
-  gCatalogIndexLoadedAt = -1.0
+  gCatalogExact: Table[string, int]
+  gCatalogLower: Table[string, int]
 
 proc cachePath(): string =
   if gForcePath.len > 0: return gForcePath
@@ -34,71 +52,300 @@ proc cachePath(): string =
 proc setModelsDevCachePath*(path: string) =
   ## Test/helper hook: use a fixed cache file (no network if file exists).
   gForcePath = path
-  gCatalog = nil
+  gCatalogLoaded = false
   gLoadedAt = 0
-  gCatalogIndexLoadedAt = -1
+  gCatalogIndex.setLen(0)
+  gCatalogExact = initTable[string, int]()
+  gCatalogLower = initTable[string, int]()
 
-proc contextFromModelNode(node: JsonNode): int =
-  if node.isNil or node.kind != JObject: return 0
-  let limit = node.getOrDefault("limit")
-  if not limit.isNil and limit.kind == JObject:
-    result = limit.getOrDefault("context").getInt
+proc catalogKey(provider, id: string): string = provider & "\x1f" & id
 
-proc findModelNode(catalog: JsonNode, provider, model: string): JsonNode =
-  if catalog.isNil or catalog.kind != JObject: return nil
-  let prov = catalog.getOrDefault(provider)
-  if prov.isNil or prov.kind != JObject: return nil
-  let models = prov.getOrDefault("models")
-  if models.isNil or models.kind != JObject: return nil
-  result = models.getOrDefault(model)
-  if not result.isNil and result.kind == JObject: return
-  if "/" in model:
-    result = models.getOrDefault(model.rsplit('/', 1)[^1])
-    if not result.isNil and result.kind == JObject: return
-  let want = model.toLowerAscii
-  for key, node in models:
-    if key.toLowerAscii == want and not node.isNil and node.kind == JObject:
-      return node
-  result = nil
+proc parserError(parser: JsonParser) {.noreturn.} =
+  raise newException(ValueError, parser.errorMsg())
 
-proc modelKeyMatch(key, want, bare: string): bool =
-  let k = key.toLowerAscii
-  k == want or k == bare or k.endsWith("/" & bare)
+proc skipValue(parser: var JsonParser) =
+  case parser.kind
+  of jsonObjectStart, jsonArrayStart:
+    var depth = 1
+    while depth > 0:
+      parser.next()
+      case parser.kind
+      of jsonObjectStart, jsonArrayStart: inc depth
+      of jsonObjectEnd, jsonArrayEnd: dec depth
+      of jsonError: parser.parserError()
+      else: discard
+  of jsonError:
+    parser.parserError()
+  else: discard
 
-proc findModelNodeAnywhere(catalog: JsonNode, model: string): JsonNode =
-  if catalog.isNil or catalog.kind != JObject: return nil
-  let want = model.toLowerAscii
-  let bare = if "/" in model: model.rsplit('/', 1)[^1].toLowerAscii else: want
-  for _, prov in catalog:
-    if prov.isNil or prov.kind != JObject: continue
-    let models = prov.getOrDefault("models")
-    if models.isNil or models.kind != JObject: continue
-    for key, node in models:
-      if modelKeyMatch(key, want, bare) and not node.isNil and node.kind == JObject:
-        return node
+proc parserFloat(parser: JsonParser): float =
+  case parser.kind
+  of jsonInt: parser.getInt.float
+  of jsonFloat: parser.getFloat
+  of jsonString:
+    try: parseFloat(parser.str)
+    except ValueError: 0.0
+  else: 0.0
 
-proc loadCatalogFromDisk(path: string): JsonNode =
-  if not fileExists(path): return nil
+proc parseLimit(parser: var JsonParser, entry: var CatalogIndexEntry) =
+  if parser.kind != jsonObjectStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonObjectEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonString: parser.parserError()
+    let key = parser.str
+    parser.next()
+    if key == "context" and parser.kind == jsonInt:
+      entry.context = parser.getInt.int
+    else:
+      parser.skipValue()
+    parser.next()
+
+proc parseCost(parser: var JsonParser, entry: var CatalogIndexEntry) =
+  if parser.kind != jsonObjectStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonObjectEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonString: parser.parserError()
+    let key = parser.str
+    parser.next()
+    let value = parser.parserFloat()
+    case key
+    of "input": entry.cost.input = value
+    of "output": entry.cost.output = value
+    of "cache_read": entry.cost.cacheRead = value
+    of "cache_write": entry.cost.cacheWrite = value
+    else: discard
+    if parser.kind in {jsonObjectStart, jsonArrayStart}:
+      parser.skipValue()
+    parser.next()
+  entry.cost.found = entry.cost.input > 0 or entry.cost.output > 0
+
+proc parseStringArray(parser: var JsonParser, values: var seq[string]) =
+  if parser.kind != jsonArrayStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonArrayEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind == jsonString: values.add parser.str
+    else: parser.skipValue()
+    parser.next()
+
+proc parseReasoningOptions(parser: var JsonParser, entry: var CatalogIndexEntry) =
+  if parser.kind != jsonArrayStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonArrayEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonObjectStart:
+      parser.skipValue()
+      parser.next()
+      continue
+    var optionType = ""
+    var values: seq[string]
+    parser.next()
+    while parser.kind != jsonObjectEnd:
+      if parser.kind == jsonError: parser.parserError()
+      if parser.kind != jsonString: parser.parserError()
+      let key = parser.str
+      parser.next()
+      if key == "type" and parser.kind == jsonString:
+        optionType = parser.str
+      elif key == "values":
+        parser.parseStringArray(values)
+      else:
+        parser.skipValue()
+      parser.next()
+    case optionType
+    of "toggle": entry.toggle = true
+    of "budget_tokens": entry.budgetTokens = true
+    of "effort":
+      for value in values:
+        let effort = value.strip.toLowerAscii
+        if effort.len > 0 and effort notin entry.efforts:
+          entry.efforts.add effort
+    else: discard
+    parser.next()
+
+proc parseProvider(parser: var JsonParser, entry: var CatalogIndexEntry) =
+  if parser.kind != jsonObjectStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonObjectEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonString: parser.parserError()
+    let key = parser.str
+    parser.next()
+    if key == "npm" and parser.kind == jsonString: entry.npm = parser.str
+    else: parser.skipValue()
+    parser.next()
+
+proc parseModalities(parser: var JsonParser, entry: var CatalogIndexEntry) =
+  if parser.kind != jsonObjectStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonObjectEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonString: parser.parserError()
+    let key = parser.str
+    parser.next()
+    if key == "input":
+      var inputs: seq[string]
+      parser.parseStringArray(inputs)
+      entry.acceptsImages = "image" in inputs
+    else:
+      parser.skipValue()
+    parser.next()
+
+proc parseModel(parser: var JsonParser, provider, id: string): CatalogIndexEntry =
+  result = CatalogIndexEntry(provider: provider, id: id, idLower: id.toLowerAscii)
+  if parser.kind != jsonObjectStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonObjectEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonString: parser.parserError()
+    let key = parser.str
+    parser.next()
+    case key
+    of "limit": parser.parseLimit(result)
+    of "reasoning":
+      if parser.kind == jsonTrue:
+        result.reasoning = true
+      elif parser.kind in {jsonObjectStart, jsonArrayStart}:
+        parser.skipValue()
+    of "reasoning_options": parser.parseReasoningOptions(result)
+    of "provider": parser.parseProvider(result)
+    of "modalities": parser.parseModalities(result)
+    of "cost": parser.parseCost(result)
+    else: parser.skipValue()
+    parser.next()
+  if result.toggle or result.budgetTokens or result.efforts.len > 0:
+    result.reasoning = true
+
+proc addCatalogEntry(snapshot: var CatalogSnapshot, entry: CatalogIndexEntry) =
+  let index = snapshot.entries.len
+  snapshot.entries.add entry
+  snapshot.exact[catalogKey(entry.provider, entry.id)] = index
+  snapshot.lower[catalogKey(entry.provider.toLowerAscii, entry.idLower)] = index
+
+proc parseModels(parser: var JsonParser, provider: string,
+                 snapshot: var CatalogSnapshot) =
+  if parser.kind != jsonObjectStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonObjectEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonString: parser.parserError()
+    let id = parser.str
+    parser.next()
+    if parser.kind == jsonObjectStart:
+      snapshot.addCatalogEntry(parser.parseModel(provider, id))
+    else:
+      parser.skipValue()
+    parser.next()
+
+proc parseProviderCatalog(parser: var JsonParser, provider: string,
+                          snapshot: var CatalogSnapshot) =
+  if parser.kind != jsonObjectStart:
+    parser.skipValue()
+    return
+  parser.next()
+  while parser.kind != jsonObjectEnd:
+    if parser.kind == jsonError: parser.parserError()
+    if parser.kind != jsonString: parser.parserError()
+    let key = parser.str
+    parser.next()
+    if key == "models": parser.parseModels(provider, snapshot)
+    else: parser.skipValue()
+    parser.next()
+
+proc parseCatalogStream(input: Stream, filename: string): CatalogSnapshot =
+  result.exact = initTable[string, int]()
+  result.lower = initTable[string, int]()
+  var parser: JsonParser
+  parser.open(input, filename)
   try:
-    result = parseJson(readFile(path))
-  except CatchableError:
-    result = nil
+    parser.next()
+    if parser.kind == jsonObjectStart:
+      parser.next()
+      while parser.kind != jsonObjectEnd:
+        if parser.kind == jsonError: parser.parserError()
+        if parser.kind != jsonString: parser.parserError()
+        let provider = parser.str
+        parser.next()
+        parser.parseProviderCatalog(provider, result)
+        parser.next()
+    else:
+      parser.skipValue()
+    parser.next()
+    if parser.kind != jsonEof:
+      parser.parserError()
+    result.valid = true
+  finally:
+    parser.close()
 
-proc ensureCatalog(): JsonNode =
-  ## Return parsed catalog from memory or disk without doing network I/O.
-  if not gCatalog.isNil and gLoadedAt > 0 and
+proc parseCatalog(raw, filename: string): CatalogSnapshot =
+  parseCatalogStream(newStringStream(raw), filename)
+
+proc parseCatalogFile(path: string): CatalogSnapshot =
+  result.exact = initTable[string, int]()
+  result.lower = initTable[string, int]()
+  if not fileExists(path): return
+  let input = newFileStream(path, fmRead)
+  if input.isNil: return
+  parseCatalogStream(input, path)
+
+proc installCatalog(snapshot: CatalogSnapshot) =
+  gCatalogIndex = snapshot.entries
+  gCatalogExact = snapshot.exact
+  gCatalogLower = snapshot.lower
+  gCatalogLoaded = true
+
+proc ensureCatalog() =
+  ## Load and compact the catalog without retaining its parsed JSON tree.
+  if gCatalogLoaded and gLoadedAt > 0 and
       epochTime() - gLoadedAt < defaultTtlSeconds.float:
-    return gCatalog
+    return
 
   let path = cachePath()
-  let disk = loadCatalogFromDisk(path)
-  if not disk.isNil:
-    gCatalog = disk
-    gLoadedAt = epochTime()
-    return gCatalog
-  gCatalog = newJObject()
+  var snapshot: CatalogSnapshot
+  try:
+    snapshot = parseCatalogFile(path)
+  except CatchableError:
+    snapshot.valid = false
+  installCatalog(snapshot)
   gLoadedAt = epochTime()
-  gCatalog
+
+proc findCatalogIndex(provider, model: string): int =
+  ensureCatalog()
+  let exact = gCatalogExact.getOrDefault(catalogKey(provider, model), -1)
+  if exact >= 0: return exact
+  if "/" in model:
+    let bare = model.rsplit('/', 1)[^1]
+    let bareExact = gCatalogExact.getOrDefault(catalogKey(provider, bare), -1)
+    if bareExact >= 0: return bareExact
+  gCatalogLower.getOrDefault(catalogKey(provider.toLowerAscii, model.toLowerAscii), -1)
+
+proc findCatalogIndexAnywhere(model: string): int =
+  ensureCatalog()
+  let want = model.toLowerAscii
+  let bare = if "/" in model: model.rsplit('/', 1)[^1].toLowerAscii else: want
+  for i, entry in gCatalogIndex:
+    if entry.idLower == want or entry.idLower == bare or
+        entry.idLower.endsWith("/" & bare):
+      return i
+  -1
 
 proc catalogName*(provider: string): string =
   ## Logical provider name → models.dev catalog key, when the two differ.
@@ -109,17 +356,16 @@ proc catalogName*(provider: string): string =
   of "opencodezen": "opencode"
   else: provider
 
-proc resolveModelNode(provider, model: string): JsonNode =
+proc resolveModelIndex(provider, model: string): int =
   ## Provider catalog, then OpenRouter, then any name match. Nil if unknown.
-  if model.len == 0: return nil
-  let catalog = ensureCatalog()
+  if model.len == 0: return -1
   let p = provider.toLowerAscii.strip
-  result = findModelNode(catalog, catalogName(p), model)
-  if not result.isNil: return
+  result = findCatalogIndex(catalogName(p), model)
+  if result >= 0: return
   if p != "openrouter":
-    result = findModelNode(catalog, "openrouter", model)
-    if not result.isNil: return
-  result = findModelNodeAnywhere(catalog, model)
+    result = findCatalogIndex("openrouter", model)
+    if result >= 0: return
+  result = findCatalogIndexAnywhere(model)
 
 type
   ReasoningCaps* = object
@@ -132,89 +378,37 @@ type
 proc lookupReasoningCaps*(provider, model: string): ReasoningCaps =
   ## Caps for this provider's catalog entry only. Miss → known=false (fail-open).
   if provider.len == 0 or model.len == 0: return
-  let node = findModelNode(ensureCatalog(), catalogName(provider), model)
-  if node.isNil or node.kind != JObject: return
+  let index = findCatalogIndex(catalogName(provider), model)
+  if index < 0: return
+  let entry = gCatalogIndex[index]
   result.known = true
-  result.reasoning = node.getOrDefault("reasoning").getBool
-  let opts = node.getOrDefault("reasoning_options")
-  if opts.isNil or opts.kind != JArray: return
-  for item in opts:
-    if item.kind != JObject: continue
-    case item.getOrDefault("type").getStr
-    of "toggle":
-      result.toggle = true
-    of "budget_tokens":
-      result.budgetTokens = true
-    of "effort":
-      let vals = item.getOrDefault("values")
-      if vals.kind != JArray: continue
-      for v in vals:
-        let s = v.getStr.strip.toLowerAscii
-        if s.len == 0: continue
-        var seen = false
-        for e in result.efforts:
-          if e == s: seen = true
-        if not seen: result.efforts.add s
-  if result.toggle or result.budgetTokens or result.efforts.len > 0:
-    result.reasoning = true
+  result.reasoning = entry.reasoning
+  result.toggle = entry.toggle
+  result.budgetTokens = entry.budgetTokens
+  result.efforts = entry.efforts
 
 proc lookupContextWindow*(provider, model: string): int =
   ## Context tokens for `provider`/`model`, or 0 if unknown / offline.
-  contextFromModelNode(resolveModelNode(provider, model))
+  let index = resolveModelIndex(provider, model)
+  if index >= 0: return gCatalogIndex[index].context
 
 proc modelApiPackage*(provider, model: string): string =
   ## `provider.npm` for this model: which wire the gateway serves it on, as
   ## `@ai-sdk/openai` (Responses), `@ai-sdk/openai-compatible` (chat), or
   ## `@ai-sdk/anthropic` (messages). "" when the catalog has no entry or opinion.
-  let node = findModelNode(ensureCatalog(), catalogName(provider), model)
-  if node.isNil: return ""
-  node.getOrDefault("provider").getOrDefault("npm").getStr
-
-proc nodeAcceptsImages(node: JsonNode): bool =
-  if node.isNil or node.kind != JObject: return false
-  let inputs = node.getOrDefault("modalities").getOrDefault("input")
-  if inputs.isNil or inputs.kind != JArray: return false
-  for item in inputs:
-    if item.getStr == "image": return true
+  let index = findCatalogIndex(catalogName(provider), model)
+  if index >= 0: return gCatalogIndex[index].npm
 
 proc lookupAcceptsImages*(provider, model: string): bool =
   ## True when the catalog lists image input, or the model is unknown (fail-open).
-  let node = resolveModelNode(provider, model)
-  if node.isNil: return model.len > 0
-  nodeAcceptsImages(node)
-
-type
-  ModelCost* = object
-    found*: bool
-    input*: float    ## USD per 1M tokens
-    output*: float
-    cacheRead*: float
-    cacheWrite*: float
-
-proc jfloat(n: JsonNode, key: string, fallback = 0.0): float =
-  if n.isNil or n.kind != JObject or key notin n: return fallback
-  let v = n[key]
-  case v.kind
-  of JFloat: v.getFloat
-  of JInt: v.getInt.float
-  of JString:
-    try: parseFloat(v.getStr)
-    except ValueError: fallback
-  else: fallback
-
-proc costFromNode(node: JsonNode): ModelCost =
-  if node.isNil or node.kind != JObject: return
-  let cost = node.getOrDefault("cost")
-  if cost.isNil or cost.kind != JObject: return
-  result.input = jfloat(cost, "input")
-  result.output = jfloat(cost, "output")
-  result.cacheRead = jfloat(cost, "cache_read")
-  result.cacheWrite = jfloat(cost, "cache_write")
-  result.found = result.input > 0 or result.output > 0
+  let index = resolveModelIndex(provider, model)
+  if index < 0: return model.len > 0
+  gCatalogIndex[index].acceptsImages
 
 proc lookupModelCost*(provider, model: string): ModelCost =
   if model.len == 0: return
-  result = costFromNode(resolveModelNode(provider, model))
+  let index = resolveModelIndex(provider, model)
+  if index >= 0: return gCatalogIndex[index].cost
 
 proc formatUsd*(amount: float): string =
   if amount <= 0: return "$0"
@@ -253,7 +447,9 @@ proc refreshModelsDevCacheAsync*(): Future[bool] {.async.} =
     client.timeout = 20_000
     defer: client.close()
     let body = await client.getContent(modelsDevUrl)
-    let parsed = parseJson(body)
+    let snapshot = parseCatalog(body, modelsDevUrl)
+    if not snapshot.valid:
+      raise newException(ValueError, "invalid models.dev catalog")
     createDir(parentDir(path))
     let tmp = path & ".tmp"
     try:
@@ -262,7 +458,7 @@ proc refreshModelsDevCacheAsync*(): Future[bool] {.async.} =
     except CatchableError:
       if fileExists(tmp): removeFile(tmp)
       raise
-    gCatalog = parsed
+    installCatalog(snapshot)
     gLoadedAt = epochTime()
     true
   except CatchableError:
@@ -311,19 +507,7 @@ proc orderedProviders(providers: openArray[string], prefer: string): seq[string]
         break
 
 proc catalogIndex(): seq[CatalogIndexEntry] =
-  let catalog = ensureCatalog()
-  if gCatalogIndexLoadedAt == gLoadedAt:
-    return gCatalogIndex
-  gCatalogIndex.setLen(0)
-  for provider, node in catalog:
-    if node.isNil or node.kind != JObject: continue
-    let models = node.getOrDefault("models")
-    if models.isNil or models.kind != JObject: continue
-    for id, model in models:
-      gCatalogIndex.add CatalogIndexEntry(provider: provider,
-        id: id, idLower: id.toLowerAscii,
-        context: contextFromModelNode(model))
-  gCatalogIndexLoadedAt = gLoadedAt
+  ensureCatalog()
   gCatalogIndex
 
 proc findCatalogModel*(id: string, providers: openArray[string],

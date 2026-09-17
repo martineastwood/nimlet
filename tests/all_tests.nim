@@ -4,6 +4,7 @@ when defined(posix):
 import ../src/workspace
 import ../src/images
 import ../src/session
+import ../src/session_export
 import ../src/config
 import ../src/trust
 import ../src/agent
@@ -2105,6 +2106,9 @@ suite "slash commands":
     check "/copy" in commandSuggestions("/co")
     check parseSlash("/copy").kind == slCopy
     check "takes no arguments" in commandError("/copy extra")
+    check "/export [file]" in commandSuggestions("/ex")
+    check parseSlash("/export").kind == slExport
+    check parseSlash("/export transcript copy.html").arg == "transcript copy.html"
     check parseSlash("/help").kind == slHelp
     check parseSlash("/provider").kind == slProvider
     check parseSlash("/provider").arg.len == 0
@@ -2207,6 +2211,44 @@ suite "slash commands":
     check agent.processInput("/copy", ui)
     check copied == "latest"
     check notices == @["Copied latest assistant response."]
+
+  test "exports a session as escaped standalone HTML":
+    let root = freshDir()
+    defer: removeDir(root)
+    var session = initSession(id = "html")
+    session.workspace = root
+    session.setName("Share <this>")
+    session.addUserMessage("hello <world>")
+    session.addAssistantResponse(ProviderResponse(content: @[
+      text("answer & details"),
+      toolUse("call", "read", %*{"path": "README.md"})]))
+    session.addToolResult(session.messages[1].content[1], "tool output", false)
+    let path = root / "nested" / "session.html"
+    exportSessionHtml(session, path)
+    let html = readFile(path)
+    check "Share &lt;this&gt;" in html
+    check "hello &lt;world&gt;" in html
+    check "answer &amp; details" in html
+    check "Tool: read" in html
+    check "tool output" in html
+    check "<script>" notin html
+
+  test "/export writes the requested session HTML file":
+    let root = freshDir()
+    defer: removeDir(root)
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    agent.session.addUserMessage("hello")
+    var notices: seq[string]
+    var ui = consoleSink()
+    ui.emit = proc (level: MsgLevel, text: string) = notices.add text
+    check agent.processInput("/export nested/session copy.html", ui)
+    let path = agent.config.workspace / "nested" / "session copy.html"
+    check fileExists(path)
+    check "hello" in readFile(path)
+    check notices.len == 1
+    check "Exported session to " & path in notices[0]
 
   test "model picker is alphabetical then filters by substring":
     let root = freshDir()

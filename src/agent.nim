@@ -1,7 +1,7 @@
 ## Minimal agent loop.
 
-import std/[asyncdispatch, json, strutils]
-import config, session, compaction, instructions, skills, models_dev, commands
+import std/[asyncdispatch, json, os, strutils]
+import config, session, session_export, compaction, instructions, skills, models_dev, commands
 import trust
 import nimterm/[ansi, theme]
 import events
@@ -147,11 +147,12 @@ proc statusFooterRight*(agent: Agent): string =
 proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   ## Add fields by priority, skipping optional detail that does not fit.
   let extensionStatuses = agent.extensionRuntime.statusTexts
-  let contextWindow = agent.config.effectiveContextWindow
   let thinking = thinkingStatus(agent.config)
   let webSearchEnabled = webSearchActive(agent.config)
   let traceRetries = if agent.traceMetrics.isNil: 0 else: agent.traceMetrics.retries
   let traceToolCalls = if agent.traceMetrics.isNil: 0 else: agent.traceMetrics.toolCalls
+  let (found, _, usage) = agent.session.lastAssistant
+  let contextWindow = if found: agent.config.effectiveContextWindow else: 0
   let state = FooterState(
     sessionId: agent.session.id, eventCount: agent.session.events.len,
     maxWidth: maxWidth, contextWindow: contextWindow,
@@ -176,7 +177,6 @@ proc statusFooter*(agent: Agent, maxWidth = int.high): string =
   let t = currentTheme
   if agent.yolo:
     parts.add t.paint(t.warning, "[yolo]")
-  let (found, _, usage) = agent.session.lastAssistant
   if found:
     if contextWindow > 0:
       let used = contextTokens(usage)
@@ -1094,6 +1094,17 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
     else:
       ui.copyText(content)
       ui.emit(mlOk, "Copied latest assistant response.")
+  of slExport:
+    let path = if cmd.arg.len > 0:
+      if cmd.arg.isAbsolute: cmd.arg else: agent.config.workspace / cmd.arg
+    else:
+      agent.config.workspace / ("nimlet-session-" & agent.session.id & ".html")
+    try:
+      exportSessionHtml(agent.session, path)
+      ui.emit(mlOk, "Exported session to " & path &
+        ". Check it for sensitive data before sharing.")
+    except CatchableError as e:
+      ui.emit(mlError, "Could not export session: " & e.msg)
   of slName:
     if cmd.arg.len == 0:
       ui.emit(mlPlain, if agent.session.name.len == 0: "(unnamed)"

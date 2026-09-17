@@ -74,6 +74,7 @@ uses the local Codex App Server; `/models refresh` loads its model list and
 | `/resume [query\|ID]` | List this project's sessions, or resume one |
 | `/fork [message]` | Fork from a user message and continue in a new session |
 | `/copy` | Copy the latest assistant response |
+| `/export [file]` | Export the session as standalone HTML |
 | `/name [title]` | Show or set the session name |
 | `/compact [instructions]` | Summarize older context |
 
@@ -86,6 +87,11 @@ uses the local Codex App Server; `/models refresh` loads its model list and
   It prints `Usage: no responses yet` before your first reply.
 - `/new`, `/resume`, and `/fork` all switch the active session; `/copy` copies the
   last assistant response to your clipboard (in the TUI only).
+- `/export` writes a standalone HTML transcript to
+  `nimlet-session-<session-id>.html` in the workspace. Pass a relative or
+  absolute path to choose the output file. The export includes messages, tool
+  calls, tool results, thinking, and attachments that are stored in the session.
+  Review it for sensitive data before sharing.
 - `/name` alone prints the title, or `(unnamed)`.
 - `/compact` compacts now, and any text you add is passed to the summarizer as an
   instruction. See [Context and compaction](/guides/context-and-compaction/).

@@ -43,6 +43,7 @@ type
     slResume
     slFork
     slCopy
+    slExport
     slReload
     slName
     slTheme
@@ -115,6 +116,8 @@ const CommandSpecs* = [
     description: "fork from a user message and continue in a new session"),
   CommandSpec(kind: slCopy, name: "/copy", usage: "/copy",
     description: "copy the latest assistant response"),
+  CommandSpec(kind: slExport, name: "/export", usage: "/export [file]",
+    description: "export the session as standalone HTML"),
   CommandSpec(kind: slReload, name: "/reload", usage: "/reload",
     description: "rescan tools, hooks, skills, and prompts"),
   CommandSpec(kind: slName, name: "/name", usage: "/name [title]",
@@ -149,7 +152,7 @@ proc helpText*(): string =
   const groupKinds: array[6, seq[SlashKind]] = [
     @[slPlan, slAct, slHelp, slLogin, slLogout, slAuth],
     @[slModel, slModelsRefresh, slThinking, slProvider, slWeb],
-    @[slSession, slStats, slNew, slResume, slFork, slCopy, slName, slCompact],
+    @[slSession, slStats, slNew, slResume, slFork, slCopy, slExport, slName, slCompact],
     @[slYolo, slTrust, slPermissions],
     @[slTheme, slSettings],
     @[slDoctor, slReload, slQuit],
@@ -245,7 +248,8 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   let matched = specNamed(command)
   if parts.len == 1 and trailingSpace and matched.found and
      matched.spec.kind in {slModelsRefresh, slThinking, slWeb, slResume, slModel,
-                           slProvider, slName, slTheme, slFork, slSession, slLogin}:
+                           slProvider, slName, slTheme, slFork, slSession, slLogin,
+                           slExport}:
     return
 
   proc fail(msg: string): SlashCommand =
@@ -364,6 +368,8 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
         return fail("Usage: " & matched.spec.usage)
       result.arg = parts[1]
   of slName:
+    result.arg = arg
+  of slExport:
     result.arg = arg
   of slTheme:
     if parts.len > 2:
