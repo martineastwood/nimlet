@@ -98,7 +98,7 @@ hero:
       <div class="landing-code">
         <div class="landing-code-bar"><span>.nimlet/extensions/notes/extension.mjs</span></div>
         <pre class="not-content"><code><span class="landing-muted">#!/usr/bin/env node</span>
-<span class="kw">import</span> readline <span class="kw">from</span> <span class="str">'node:readline'</span>
+<span class="kw">import</span> readline <span class="kw">from</span> <span class="str">'node:readline'</span>&#10;
 <span class="kw">const</span> send = (message) => process.stdout.write(JSON.stringify(message) + <span class="str">'\n'</span>)
 send({
   type: <span class="str">'register'</span>,
@@ -108,7 +108,7 @@ send({
     description: <span class="str">'Save a note about the current work.'</span>,
     input_schema: { type: <span class="str">'object'</span>, properties: { text: { type: <span class="str">'string'</span> } }, required: [<span class="str">'text'</span>] },
   }],
-})
+})&#10;
 <span class="kw">for await</span> (<span class="kw">const</span> line <span class="kw">of</span> readline.createInterface({ input: process.stdin })) {
   <span class="kw">const</span> message = JSON.parse(line)
   <span class="kw">if</span> (message.type === <span class="str">'shutdown'</span>) <span class="kw">break</span>
