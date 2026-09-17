@@ -565,7 +565,7 @@ suite "black-box terminal integration":
       ModelPicker())
     screen.busy = true
     screen.activity = "Waiting for model…"
-    screen.footer = screen.statusLine("[act] · startup-model")
+    screen.footer = "[act] · startup-model"
     var app = termapp.newApp(backend, screen)
     app.render()
     let activityY = screen.composer.area.y - 2

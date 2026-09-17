@@ -37,20 +37,18 @@ proc runNimtermTUI*(agent: var Agent, catalogNote = "", initialPrompt = "",
   defer: app.backend.shutdown()
   app.running = true
   if agent.session.events.len > 0:
-    screen.footer = screen.statusLine("Loading session…")
+    screen.footer = "Loading session…"
   app.render()
   if agent.session.events.len > 0:
     screen.replaySession(agent.session)
-    screen.footerRight = agent.statusFooterRight()
-    screen.footer = screen.statusLine(agent.statusFooter(screen.statusWidth))
-    app.invalidate()
+    controller.refreshFooter()
     app.render()
   if initialPrompt.len > 0:
     screen.composer.setText(initialPrompt)
     controller.handleAction(app, screen.submit().action)
   var lastSpinnerFrame = -1
   while app.running:
-    if not app.step(if screen.busy: 16 else: 100) and
+    if not app.step(if screen.busy: 50 else: 100) and
         ((screen.busy and (int(max(0.0, epochTime() -
           screen.spinnerStartedAt) * 12.0) mod 10) != lastSpinnerFrame) or
          (screen.notice.len > 0 and epochTime() >= screen.noticeUntil)):

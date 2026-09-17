@@ -72,7 +72,7 @@ proc refreshFooter*(controller: NimletController, width = 0) =
   var status = controller.agent[].statusFooter(statusWidth)
   let queued = controller.steeringQueue.len + controller.followUpQueue.len
   if queued > 0: status.add " · queue:" & $queued
-  controller.screen.footer = controller.screen.statusLine(status)
+  controller.screen.footer = status
 
 proc processExtensionUpdates(controller: NimletController) =
   controller.agent[].extensionRuntime.pump()
@@ -96,9 +96,10 @@ else:
 
 proc takeQueue(queue: var seq[string], mode: string): seq[string] =
   if queue.len == 0: return
-  let count = if mode == "all": queue.len else: 1
-  for _ in 0 ..< count:
-    result.add queue[0]
+  if mode == "all":
+    result = move(queue)
+  else:
+    result = @[queue[0]]
     queue.delete(0)
 
 proc restoreQueuedMessages(controller: NimletController) =
@@ -229,10 +230,7 @@ proc previewSink(controller: NimletController): TurnSink =
       refresh(),
     render: proc () = refresh(),
     onChange: proc () = refresh(),
-    commitGenerate: proc (response: ProviderResponse, isFinal: bool) =
-      discard response
-      discard isFinal
-      refresh(),
+    commitGenerate: proc (_: ProviderResponse, _: bool) = refresh(),
     userMessage: proc (text: string) =
       screen.transcript.appendUser(text)
       refresh(),
@@ -349,8 +347,6 @@ proc runShellShortcut(controller: NimletController, text: string): bool =
     controller.screen.transcript.appendStatus(
       if output.len == 0: "(no output)"
       else: output.strip(leading = false, chars = {'\n', '\r'}))
-    controller.screen.footer = controller.screen.statusLine(
-      "shell exited " & $shell.exitCode)
     controller.refreshFooter()
   true
 
@@ -437,7 +433,7 @@ proc handleAction*(controller: NimletController, running: var App,
         screen.notice = "External editor applied"
         screen.noticeUntil = epochTime() + 2.0
       elif edited.error.len > 0:
-        screen.footer = screen.statusLine("editor: " & edited.error)
+        screen.footer = "editor: " & edited.error
       if not running.backend.isNil: running.backend.resetPresentation()
       running.invalidate()
     of "copy":

@@ -63,9 +63,6 @@ method children*(screen: NimtermScreen): seq[Widget] =
     if screen.menu.items.len > 0: result.add screen.menu
     result.add screen.composer
 
-proc statusLine*(screen: NimtermScreen, status: string): string =
-  status
-
 proc activityLine*(screen: NimtermScreen): string =
   if not screen.busy and screen.activity.len == 0: return ""
   let frame = int(max(0.0, epochTime() - screen.spinnerStartedAt) * 12.0) mod
@@ -81,9 +78,6 @@ proc statusWidth*(screen: NimtermScreen, width = 0): int =
   if terminalWidth == 0: return int.high
   let rightWidth = ansiVisibleWidth(screen.footerRight)
   max(0, terminalWidth - (if rightWidth > 0: rightWidth + 3 else: 0))
-
-proc workingFooter*(screen: NimtermScreen, status: string): string =
-  screen.statusLine(status)
 
 proc loadHistory(screen: NimtermScreen) =
   let path = nimletConfigDir() / "history"
@@ -569,10 +563,9 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
       if screen.composer.text.strip.len > 0:
         let queued = screen.composer.text
         if queued.strip.startsWith("/") or queued.strip.startsWith("!"):
-          screen.footer = screen.statusLine(
-            if queued.strip.startsWith("!"):
-              "shell shortcuts cannot be queued"
-            else: "slash commands cannot be queued")
+          screen.footer = if queued.strip.startsWith("!"):
+            "shell shortcuts cannot be queued"
+          else: "slash commands cannot be queued"
         else:
           screen.rememberInput()
           screen.composer.clear()
@@ -583,10 +576,9 @@ method handle*(screen: NimtermScreen, event: UiEvent): EventResponse =
       if screen.composer.text.strip.len > 0:
         let queued = screen.composer.text
         if queued.strip.startsWith("/") or queued.strip.startsWith("!"):
-          screen.footer = screen.statusLine(
-            if queued.strip.startsWith("!"):
-              "shell shortcuts cannot be queued"
-            else: "slash commands cannot be queued")
+          screen.footer = if queued.strip.startsWith("!"):
+            "shell shortcuts cannot be queued"
+          else: "slash commands cannot be queued"
         else:
           screen.rememberInput()
           screen.composer.clear()
