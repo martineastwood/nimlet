@@ -9,7 +9,7 @@ export default defineConfig({
 		starlight({
 			title: 'nimlet',
 			description: 'A local coding agent for your repository. A native binary with fast startup, low memory, and idle CPU until it works.',
-			favicon: '/favicon.svg',
+			favicon: '/favicon.ico',
 			head: [
 				{ tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: '48x48' } },
 				{ tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/favicon-32x32.png' } },
