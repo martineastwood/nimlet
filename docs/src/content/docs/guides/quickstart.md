@@ -8,6 +8,9 @@ your `PATH`. Give it a provider credential, then run it from the workspace you
 want the agent to inspect or change. No language toolchain or source checkout is
 required to use nimlet.
 
+To build from source, install Nim 2.0 or later and run `nimble release`, which
+writes `build/nimlet`.
+
 ## Configure provider access
 
 ```sh
@@ -77,6 +80,51 @@ cat README.md | nimlet --print "Summarize this text"
 
 Piped input is added before the optional command-line prompt. Use
 `--no-session` for a run that is not written to the session directory.
+
+## Resume a session
+
+Sessions are saved automatically. Pick up where you left off:
+
+```sh
+nimlet --resume                      # latest session for this workspace
+nimlet --session 1789233281025102    # one specific session
+```
+
+Inside the TUI, `/resume` opens a picker and `/new` starts fresh. See
+[Sessions](/guides/sessions/) for naming, forking, export, and recovery.
+
+## Flags for scripts and CI
+
+These flags apply to one process only and are never written to your config:
+
+| Flag | Purpose |
+| --- | --- |
+| `--provider NAME` | Provider for this run |
+| `--model ID` | Model for this run |
+| `--thinking LEVEL` | Thinking level for this run |
+| `--api-key KEY` | In-memory API key override |
+| `--tools LIST` | Restrict tools (`read,grep,glob` or `none`) |
+| `--yolo` | Auto-approve all tools |
+| `--approve` | Load project customizations without the trust prompt |
+| `--no-approve` | Skip project customizations |
+| `--no-fullscreen` | Keep terminal scrollback instead of the alternate screen |
+
+Headless runs (`-p`, `--mode json`, `--mode rpc`) have no approval UI, so tools
+run without prompting. Narrow the tool list when you can:
+
+```sh
+nimlet -p "summarize the README" --tools read
+```
+
+The full flag list is in [Commands and shortcuts](/reference/commands/#cli-flags).
+
+## Project trust
+
+The first time you open a repository that ships nimlet customizations (project
+tools, extensions, skills, prompts, themes, or `.nimlet/config.json`), nimlet
+asks whether to load them. The default is no. Answer yes with `/trust on`, or
+for one run with `--approve`. See [Security](/guides/security/) for what trust
+covers.
 
 ## Next steps
 

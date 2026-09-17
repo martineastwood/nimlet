@@ -69,6 +69,7 @@ html[data-has-hero] .sl-markdown-content {
 }
 
 .landing-terminal pre,
+.landing-code pre,
 .landing-start pre {
 	margin: 0;
 	padding: clamp(1.25rem, 4vw, 2.5rem);
@@ -81,11 +82,25 @@ html[data-has-hero] .sl-markdown-content {
 	white-space: pre-wrap;
 }
 
+.landing-terminal code,
+.landing-code code,
+.landing-start code {
+	background: none;
+	margin: 0;
+	padding: 0;
+	border-radius: 0;
+	box-shadow: none;
+	color: inherit;
+	font-size: inherit;
+}
+
 .landing-prompt {
 	color: #75d99c;
 }
 
 .landing-input {
+	display: inline-block;
+	margin: 0.6em 0 0.85em;
 	color: #ffffff;
 }
 
@@ -95,11 +110,20 @@ html[data-has-hero] .sl-markdown-content {
 
 .landing-success {
 	display: inline-block;
+	margin-top: 0.6em;
 	padding: 0 0.35rem;
 	border-radius: 0.25rem;
 	background: #dcfce7;
 	color: #14532d;
 	font-weight: 700;
+}
+
+.landing-code .kw {
+	color: #7dd3fc;
+}
+
+.landing-code .str {
+	color: #86efac;
 }
 
 .landing-section {
@@ -173,6 +197,39 @@ html[data-has-hero] .sl-markdown-content {
 	color: var(--sl-color-gray-3);
 	font-size: 0.95rem;
 	line-height: 1.6;
+}
+
+.landing-extend {
+	display: flex;
+	flex-direction: column;
+	gap: 2.75rem;
+	margin-bottom: 2.75rem;
+}
+
+.landing-code {
+	width: 100%;
+	overflow: hidden;
+	border: 1px solid #30343d;
+	border-radius: 1rem;
+	background: #101216;
+}
+
+.landing-code-bar {
+	padding: 0.9rem 1.15rem;
+	border-bottom: 1px solid #30343d;
+	color: #a5abb8;
+	font-family: var(--sl-font-mono);
+	font-size: 0.8rem;
+}
+
+.landing-code pre {
+	padding: 1.25rem 1.5rem;
+	white-space: pre;
+	overflow-x: auto;
+}
+
+.landing-section > .landing-links {
+	margin-top: 0.5rem;
 }
 
 .landing-split {

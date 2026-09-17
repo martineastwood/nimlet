@@ -63,6 +63,11 @@ disk, so nothing is lost - it will still be there under `/resume`.
 session lists, which makes a stack of timestamps much easier to tell apart.
 `/name` on its own prints the current name.
 
+`/stats` prints the active provider and model, the latest request's token usage
+and cost estimate, the context window percentage, and the same numbers totalled
+across the session. `/copy` copies the latest assistant response to your clipboard
+in the interactive TUI.
+
 ## Resuming
 
 `/resume` on its own opens a session picker inside the composer, listing the
@@ -159,6 +164,19 @@ Session changed on disk; reload before recovery.
 ```
 
 Reload with `/resume <id>` or start with `/new`, then try again.
+
+## Export and sharing
+
+`/export` writes a standalone HTML transcript to
+`nimlet-session-<session-id>.html` in the workspace. Pass a path to choose the
+output file:
+
+```text
+/export review.html
+```
+
+The export includes messages, tool calls, tool results, thinking, and
+attachments stored in the session. Review it for sensitive data before sharing.
 
 ## Renaming, deleting, and restoring
 

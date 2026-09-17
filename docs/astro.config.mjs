@@ -8,7 +8,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'nimlet',
-			description: 'A local coding agent for software projects.',
+			description: 'A local coding agent for your repository. A native binary with fast startup, low memory, and idle CPU until it works.',
 			favicon: '/favicon.svg',
 			head: [
 				{ tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: '48x48' } },

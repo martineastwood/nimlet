@@ -116,7 +116,12 @@ All of these live under `agent`:
 | `session_dir` | `~/.nimlet/sessions` | Where sessions are written. `~` expands; a relative path resolves from the directory you started nimlet in |
 | `steering_mode` | `one-at-a-time` | How queued steering messages are delivered (`one-at-a-time` or `all`) |
 | `follow_up_mode` | `one-at-a-time` | The same for follow-ups |
-| `tools.bash.max_output_bytes` | `100000` | Truncation limit for shell output |
+
+Shell output is capped separately, at the top level under `tools`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `tools.bash.max_output_bytes` | `100000` | Truncation limit for `bash` and external tool stdout |
 
 Two notes:
 
@@ -136,8 +141,38 @@ Two notes:
 }
 ```
 
-`theme` is a theme name or `auto`, which follows the terminal's background. An
-empty array in `keybindings` disables that action's default binding. The action
+`theme` is a theme name or `auto`, which follows the terminal's background. Built-in
+names are `auto`, `dark`, and `light`. Custom themes are JSON files in
+`~/.nimlet/themes/` or `.nimlet/themes/` (trusted project). Each file needs a
+`name` and a `colors` object with every token:
+
+```json title="~/.nimlet/themes/solar.json"
+{
+  "name": "solar",
+  "colors": {
+    "accent": "#00afaf",
+    "success": "#00af00",
+    "error": "#af0000",
+    "warning": "#afaf00",
+    "code": "#d7af5f",
+    "muted": "242",
+    "dim": "dim",
+    "text": "#c6c6c6",
+    "heading": "#5f87ff",
+    "model": "#af00af",
+    "panelBg": "#303030",
+    "selectedBg": "#5fd7ff",
+    "selectedFg": "#000000"
+  }
+}
+```
+
+Color values are `#rrggbb` hex, a 256-color index (`0` through `255`), or the
+literal `dim` for the `dim` token. Apply with `/theme solar`. See
+[Interactive TUI](/guides/interactive-tui/) for how theme changes affect the
+transcript.
+
+An empty array in `keybindings` disables that action's default binding. The action
 names and the full default table are in
 [Keyboard shortcuts](/reference/keybindings/).
 

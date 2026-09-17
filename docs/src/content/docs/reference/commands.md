@@ -231,6 +231,41 @@ a follow-up. Slash commands and shell shortcuts cannot be queued; the composer
 tells you `slash commands cannot be queued` or `shell shortcuts cannot be queued`
 instead of silently dropping them.
 
+## CLI flags
+
+These flags apply when you start nimlet from the shell. They override config for
+one process only and are never persisted. Run `nimlet --help` for the same list.
+
+| Flag | Purpose |
+| --- | --- |
+| `--help`, `-h` | Print usage and exit |
+| `--version` | Print version and exit |
+| `--print`, `-p` | Print only the final response to stdout |
+| `--mode json` | One turn, versioned JSONL events on stdout |
+| `--mode rpc` | Long-running JSONL command protocol on stdin/stdout |
+| `--provider NAME` | Provider for this process |
+| `--model ID` | Model for this process |
+| `--thinking LEVEL` | Thinking level for this process |
+| `--api-key KEY` | In-memory API key override |
+| `--tools LIST` | Restrict tools (`read,grep,...` or `none`) |
+| `--no-session` | Skip session read/write |
+| `--session ID` | Resume a specific session at startup |
+| `--resume` | Resume the latest session for this workspace |
+| `--yolo` | Auto-approve all tools for this process |
+| `--fullscreen` | Use the alternate screen (default) |
+| `--no-fullscreen`, `--regular` | Keep normal terminal scrollback |
+| `--approve` | Load project customizations without the trust prompt |
+| `--no-approve` | Skip project customizations |
+| `--interactive`, `-i` | Keep the REPL after a CLI prompt |
+| `--` | End of flags; remaining words are the prompt |
+
+A prompt after the flags runs one turn and exits unless `--interactive` is set.
+Piped stdin is merged before the CLI prompt and selects print mode when stdout
+is not a TTY.
+
+`--no-session` cannot be combined with `--resume` or `--session`. `--approve`
+and `--no-approve` cannot be combined.
+
 ## Where to go next
 
 - [Keyboard shortcuts](/reference/keybindings/) for every key binding

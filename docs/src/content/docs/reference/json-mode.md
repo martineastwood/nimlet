@@ -22,6 +22,22 @@ included when they exist. Startup failures and project trust notices are
 written to stderr. The process exits with status 1 when the turn fails and 0 on
 success. Invalid CLI usage exits with status 2.
 
+## Useful flags
+
+JSON mode shares the same startup flags as other non-interactive runs. Common
+combinations:
+
+```sh
+nimlet --mode json --no-session "Summarize this repo"
+nimlet --mode json --tools read,grep "Where is the parser defined?"
+nimlet --mode json --provider anthropic --model claude-sonnet-4-6 "Hello"
+```
+
+There is no approval UI in JSON mode, so tools run without prompting. Use
+`--tools` to narrow what is available, and `--no-session` when you do not want
+the transcript written to disk. The `approval_required` event is emitted only by
+the interactive TUI.
+
 ## Record order
 
 A session run normally starts and ends like this:

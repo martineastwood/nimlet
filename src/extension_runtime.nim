@@ -12,7 +12,6 @@ import trust
 import nimgent
 import tools/tool
 import hooks
-import shell
 
 type
   ExtensionQuestionProc* = proc(prompt: string,

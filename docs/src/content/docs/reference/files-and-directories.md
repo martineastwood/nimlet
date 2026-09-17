@@ -42,7 +42,7 @@ The portable roots `~/.agents/skills`, `~/.agents/prompts`, and
 | `.nimlet/tools/`, `.agent/tools/` | Trusted project external tools |
 | `.nimlet/extensions/`, `.agents/extensions/` | Trusted project persistent extensions |
 | `.nimlet/themes/*.json` | Trusted project themes |
-| `.nimlet/clips/` | Workspace images saved from pasted or attached image data |
+| `.nimlet/clips/` | Images copied here when you paste a path outside the workspace |
 
 `AGENTS.override.md`, `AGENTS.md`, and `CLAUDE.md` are discovered from the
 global nimlet directory and project directories up to the Git root. Project

@@ -5,9 +5,9 @@ description: Persistent subprocesses that register tools, commands, and lifecycl
 
 An extension is a program nimlet starts and keeps running while it is open,
 talking over JSON lines on stdin and stdout. Any language works. While it runs, an
-extension can register tools the model can call, add slash commands you can type,
-and react to what happens in the session: tool calls, turns starting and
-finishing, compaction, sessions opening and closing.
+extension can register tools the model can call, slash commands you can type, and
+lifecycle hooks that run before or after tool calls, turns, sessions, and
+compaction.
 
 The difference from a `tool.json` tool: a tool is spawned per call with one JSON
 argument and one JSON result, then exits. An extension is a conversation - it
@@ -43,74 +43,611 @@ The project roots are only searched when you have trusted the project.
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `name` | Required. Used in warnings, and as the namespace for status, widget, and stored entry keys |
-| `command` | Required, non-empty array: the program and its arguments. The first element is resolved against the extension's folder when it contains a `/` |
-| `response_timeout_seconds` | How long nimlet waits for a reply. Default 30, or `null` for no timeout. Time spent waiting for you to answer a question does not count |
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | string | yes | Used in warnings and as the namespace for status, widget, and entry keys |
+| `command` | string array | yes | Program and arguments. Non-empty. The first element is resolved against the extension folder when it contains `/` |
+| `response_timeout_seconds` | integer or `null` | no | Seconds nimlet waits for a reply. Default `30`. `null` means no timeout. Time spent waiting for a user question does not count |
 
-The process starts with your workspace as its working directory, so relative
-paths inside the extension see your project.
+The process starts with your workspace as its working directory.
 
-Tell the extension to run itself rather than naming an interpreter:
-
-```json
-{"name": "notes", "command": ["./extension.py"]}
-```
-
-Only the first element of `command` is resolved against the extension folder
-when it contains `/`, so `["python3", "./extension.py"]` would look for the
-script in your workspace instead. On POSIX, make the file executable and give it
-a shebang, and `"command": ["./extension.py"]` works. On Windows, use a
-`.cmd` wrapper, or pass a workspace-relative script path to an interpreter, for
-example `["python", ".nimlet/extensions/notes/extension.py"]`. `.sh`, `.ps1`,
-`.cmd`, and `.bat` files are launched through the matching interpreter.
+On POSIX, make scripts executable with a shebang and use `"command": ["./extension.py"]`.
+On Windows, use a `.cmd` wrapper or pass a workspace-relative path to an
+interpreter, for example `["python", ".nimlet/extensions/notes/extension.py"]`.
+`.sh`, `.ps1`, `.cmd`, and `.bat` files are launched through the matching
+interpreter.
 
 A manifest that does not parse, or is missing `name` or `command`, is skipped
 with a startup warning such as `skipping /path: missing name`. Nothing crashes.
 
-## The handshake
+## Transport and handshake
 
-nimlet sends one line:
+**Rules:**
+
+- One JSON object per line on stdin and stdout. No other stdout output.
+- Nimlet writes requests to your stdin. You write replies to stdout.
+- Every request has an `id` string. Every `response` must echo the same `id`.
+- Replies may arrive in any order; ids are how nimlet matches them.
+- Several requests can be in flight at once.
+- Stderr is not read. Write logs to a file.
+
+**Startup sequence:**
+
+1. Nimlet starts your process with the workspace as the working directory.
+2. Nimlet writes `initialize` to your stdin (no reply expected).
+3. You write `register` to stdout. Nimlet waits for this line before continuing.
+4. Nimlet may send `tool`, `command`, `event`, `cancel`, or `shutdown` requests.
+5. You may send `response`, `update`, or `ui_request` lines at any time.
+
+Most extensions print `register` immediately at startup, then enter a read loop.
+
+### `initialize` (nimlet → extension)
+
+Sent once when the extension starts. No reply.
 
 ```json
-{"type":"initialize","version":1,"workspace":"/home/you/code/project","session_id":"1789233281025102"}
+{
+  "type": "initialize",
+  "version": 1,
+  "workspace": "/home/you/code/project",
+  "session_id": "1789233281025102"
+}
 ```
 
-and waits for one line back:
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"initialize"` | |
+| `version` | `1` | Protocol version |
+| `workspace` | string | Absolute path to the workspace |
+| `session_id` | string | Current session id |
+
+On `/reload`, `/new`, `/resume`, or a trust change, extensions restart and you
+receive a fresh `initialize` with the current session id.
+
+### `register` (extension → nimlet)
+
+Your first stdout line. Nimlet blocks until it arrives or times out.
 
 ```json
-{"type":"register",
- "commands":[{"name":"note","description":"Append a note to NOTES.md"}],
- "tools":[{"name":"save_note","description":"Save a note about the current work.",
-   "input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]},
-   "capabilities":["read"]}],
- "events":["tool_result"]}
+{
+  "type": "register",
+  "commands": [
+    {"name": "note", "description": "Append a note to NOTES.md"}
+  ],
+  "tools": [
+    {
+      "name": "save_note",
+      "description": "Save a note about the current work.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"]
+      },
+      "capabilities": ["read"]
+    }
+  ],
+  "events": ["tool_call", "tool_result"]
+}
 ```
 
-Everything is optional except `commands`, which must be an array (empty is fine).
-Registered tools need `name`, `description`, and an object `input_schema`;
-`capabilities` is optional and decides plan mode and approval, as described below.
-`events` lists only the lifecycle events this extension wants to receive.
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | `"register"` | yes | |
+| `commands` | array | yes | May be empty. Slash commands you expose |
+| `tools` | array | no | Model-callable tools. Omit when you have none |
+| `events` | array of strings | no | Lifecycle hook names to subscribe to. Omit when you have none |
 
-Registration is validated hard, because a half-registered extension is worse than
-none. A `register` line that is not an object, `commands` or `events` that are not
-arrays, a tool without a name, description, or schema, or an unknown capability
-name all count as a failed start: nimlet prints a warning, stops the process, and
-carries on without it.
+**`commands[]` entries:**
 
-After registering, nimlet reads the extension's output on a dedicated thread, so a
-response wakes the interface immediately. There is no polling and no idle CPU
-cost.
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | string | yes | Becomes `/name` in the composer (case-insensitive) |
+| `description` | string | no | Shown in tab completion |
 
-The conversation itself is strictly one JSON object per line in each direction.
-Requests arrive on your stdin in the order nimlet sent them, and replies may come
-back in any order: each one is matched by its `id`, so several requests can be in
-flight at once. A tool call while a question is pending is normal, not a bug.
+**`tools[]` entries:**
 
-## A small extension
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `name` | string | yes | Tool name the model sees. Must not collide with a built-in |
+| `description` | string | yes | |
+| `input_schema` | object | yes | JSON Schema object for the tool arguments |
+| `capabilities` | string array | no | See [Tool capabilities](#tool-capabilities). Omitting means `write`, `shell`, and `network` |
 
-A command, a tool, and a status line, in about thirty lines of Python:
+**`events[]` values:** one of the eight hook names in [Lifecycle events](#lifecycle-events).
+
+Registration is validated strictly. Invalid `register` lines fail startup with a
+warning and the process is stopped.
+
+## Messages from nimlet
+
+### `tool`
+
+The model called one of your registered tools.
+
+```json
+{
+  "type": "tool",
+  "id": "7",
+  "name": "save_note",
+  "arguments": {"text": "remember the cache bug"}
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"tool"` | |
+| `id` | string | Reply id |
+| `name` | string | Tool name from your `register` |
+| `arguments` | object | Tool arguments from the model. `{}` when empty |
+
+Reply with `content` (string) and optional `is_error` (boolean, default `false`).
+You can include side-effect fields (`status`, `widget`, `notification`, `entry`)
+on the same `response` line.
+
+### `command`
+
+You typed a registered slash command.
+
+```json
+{
+  "type": "command",
+  "id": "3",
+  "name": "note",
+  "arguments": "remember the cache bug"
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"command"` | |
+| `id` | string | Reply id |
+| `name` | string | Command name from your `register` |
+| `arguments` | string | Plain text after the command. Empty string when you typed `/note` alone |
+
+Reply fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `message` | string | Printed in the transcript |
+| `prompt` | string | If set, becomes the next user message and starts a turn |
+
+Both can appear together: print `message`, then run `prompt`.
+
+### `event`
+
+A lifecycle hook you subscribed to in `register.events`.
+
+```json
+{
+  "type": "event",
+  "id": "9",
+  "event": "tool_call",
+  "payload": {
+    "tool": "bash",
+    "arguments": {"command": "npm test"}
+  }
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"event"` | |
+| `id` | string | Reply id |
+| `event` | string | Hook name |
+| `payload` | object | Event-specific fields. See [Lifecycle events](#lifecycle-events) |
+
+You must reply to every `event`, even when you have nothing to change. An empty
+acknowledgement is enough:
+
+```json
+{"type": "response", "id": "9"}
+```
+
+### `cancel`
+
+Sent when the user interrupts while nimlet is waiting for your reply to another
+request. No reply needed.
+
+```json
+{"type": "cancel", "id": "7"}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"cancel"` | |
+| `id` | string | The `id` of the request being cancelled |
+
+### `shutdown`
+
+Nimlet is exiting or reloading. No reply needed. Stop your loop after this.
+
+```json
+{"type": "shutdown"}
+```
+
+## Messages from your extension
+
+### `response`
+
+Reply to a `tool`, `command`, or `event` request. Always echo the request `id`.
+
+```json
+{"type": "response", "id": "7", "content": "Saved.", "is_error": false}
+```
+
+Fields nimlet reads depend on what you are replying to:
+
+| Field | Type | Used for | Meaning |
+| --- | --- | --- | --- |
+| `type` | `"response"` | all | |
+| `id` | string | all | Must match the request |
+| `content` | string | `tool` | Tool result text |
+| `is_error` | boolean | `tool` | Whether the tool failed |
+| `message` | string | `command` | Text printed to the user |
+| `prompt` | string | `command` | Starts a new turn with this text |
+| `allow` | boolean | `tool_call`, `session_before_compact` | `false` blocks the action |
+| `reason` | string | `tool_call`, `session_before_compact` | Shown to the model or user when blocked |
+| `arguments` | object | `tool_call` | Replaces the tool arguments before execution |
+| `output` | string | `tool_result` | Replaces tool output |
+| `is_error` | boolean | `tool_result` | Replaces the error flag |
+| `instruction` | string | `session_before_compact` | Extra instruction for the summarizer |
+| `compaction` | object | `session_before_compact` | Full custom compaction. See below |
+| `status` | object | any | Footer status line |
+| `widget` | object | any | Lines above the footer |
+| `notification` | object | any | Transcript message |
+| `entry` | any JSON | any | Durable session data |
+
+**`compaction` object** (on `session_before_compact` replies):
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `summary` | string | yes | Markdown summary written to the session |
+| `first_kept_index` | integer | yes | How many session events to keep verbatim after the summary |
+| `details` | any JSON | no | Stored in the session compaction record |
+
+### `update`
+
+Unsolicited side effects. No `id` required. Same side-effect fields as `response`:
+
+```json
+{
+  "type": "update",
+  "status": {"key": "job", "text": "researching"},
+  "widget": {"key": "agents", "lines": ["✓ research", "… tests"]},
+  "notification": {"level": "info", "message": "Research complete"},
+  "entry": {"completed": ["research"]}
+}
+```
+
+You can send `update` while a request is in flight, including from another thread,
+as long as each line is valid JSON.
+
+### `ui_request` and `ui_response`
+
+Ask the user a multiple-choice question from inside a `tool` or `command` handler:
+
+```json
+{
+  "type": "ui_request",
+  "id": "q1",
+  "method": "question",
+  "prompt": "Which environment?",
+  "options": ["staging", "production"]
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"ui_request"` | |
+| `id` | string | Matched on the response |
+| `method` | `"question"` | Only supported method today |
+| `prompt` | string | Question text |
+| `options` | string array | Choices shown to the user |
+
+Nimlet replies on stdin:
+
+```json
+{"type": "ui_response", "id": "q1", "answer": "staging", "cancelled": false}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"ui_response"` | |
+| `id` | string | Matches your `ui_request` |
+| `answer` | string | Selected option. Empty when dismissed |
+| `cancelled` | boolean | `true` when there is no TUI to ask, or the user dismissed the prompt |
+
+Time waiting for `ui_response` does not count against `response_timeout_seconds`.
+
+## Lifecycle events
+
+These are the only hook names you can list in `register.events`. Unknown names
+are accepted at registration but never fire.
+
+| Event | When it fires |
+| --- | --- |
+| `tool_call` | Before a tool executes |
+| `tool_result` | After a tool returns, before the result is saved |
+| `turn_start` | At the start of each agent turn |
+| `turn_end` | When a turn finishes or is interrupted |
+| `session_start` | When nimlet starts, and after `/new`, `/resume`, or `/fork` |
+| `session_end` | Before switching sessions, and when nimlet exits |
+| `session_before_compact` | Before compaction runs (auto or manual `/compact`) |
+| `session_compact` | After compaction finishes |
+
+**When hooks do not run:**
+
+- **Plan mode** - no lifecycle events are dispatched. Switch to act mode first.
+- **`ask_user`** - the built-in question tool does not trigger `tool_call` or
+  `tool_result` hooks.
+
+**Which tools trigger `tool_call` / `tool_result`:**
+
+- All built-in tools except `ask_user`
+- All extension tools you register
+- `read`, `grep`, `glob`, and `read_skill` can run in parallel when the model
+  requests several in one step; each still gets its own hook round trip
+
+**Multiple extensions:** if several extensions subscribe to the same event,
+nimlet asks each one in startup order. For `tool_call` and
+`session_before_compact`, any `allow: false` blocks the action; reasons are joined
+with `; `. On other events, `allow: false` is ignored but you must still reply.
+
+### `tool_call`
+
+**Payload:**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `tool` | string | Tool name (`bash`, `read`, your extension tool name, etc.) |
+| `arguments` | object | Arguments the model sent. `{}` when empty |
+
+**Reply fields that change behavior:**
+
+| Field | Effect |
+| --- | --- |
+| `allow: false` | Blocks the tool. The model receives `approval_denied` with `reason` |
+| `arguments` | Replaces the arguments object before execution |
+
+```json
+{"type": "response", "id": "9", "allow": false, "reason": "Not while tests are running"}
+```
+
+```json
+{"type": "response", "id": "9", "arguments": {"path": "src/main.py"}}
+```
+
+### `tool_result`
+
+**Payload:**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `tool` | string | Tool name |
+| `arguments` | object | Arguments that were used (after any `tool_call` rewrite) |
+| `output` | string | Tool output text |
+| `is_error` | boolean | Whether the tool failed |
+
+**Reply fields that change behavior:**
+
+| Field | Effect |
+| --- | --- |
+| `output` | Replaces the output string saved to the session |
+| `is_error` | Replaces the error flag |
+
+`allow: false` has no effect on this event.
+
+### `turn_start`
+
+**Payload:**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session_id` | string | |
+| `workspace` | string | Absolute workspace path |
+
+Fires once per user message that starts an agent turn. Reply to acknowledge.
+`allow: false` has no effect. Use side-effect fields if you want to update the
+footer or store session data.
+
+### `turn_end`
+
+**Payload:**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session_id` | string | |
+| `workspace` | string | |
+| `interrupted` | boolean | Present and `true` when the user stopped the turn with Esc or Ctrl+C |
+
+Reply to acknowledge. `allow: false` has no effect.
+
+### `session_start`
+
+**Payload:**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session_id` | string | |
+| `workspace` | string | |
+
+Fires at nimlet startup and after `/new`, `/resume`, or `/fork`. Reply to
+acknowledge. `allow: false` has no effect.
+
+### `session_end`
+
+**Payload:** same as `session_start`.
+
+Fires before switching to another session and when nimlet exits. Reply to
+acknowledge. `allow: false` has no effect.
+
+### `session_before_compact`
+
+**Payload:**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session_id` | string | |
+| `workspace` | string | |
+| `instruction` | string | Manual `/compact` instruction, or empty for auto-compaction |
+| `tokens_before` | integer | Estimated context tokens before compaction |
+| `entries` | array | Full session as JSON. See [Session entries](#session-entries) |
+
+**Reply fields that change behavior:**
+
+| Field | Effect |
+| --- | --- |
+| `allow: false` | Skips compaction. `reason` is shown to the user |
+| `instruction` | Appended to the summarizer instruction (after any existing instruction, separated by a newline) |
+| `compaction` | Skips the built-in summarizer and uses your summary instead |
+
+```json
+{
+  "type": "response",
+  "id": "9",
+  "compaction": {
+    "summary": "## Goal\n…",
+    "first_kept_index": 96,
+    "details": {"source": "my-extension"}
+  }
+}
+```
+
+### `session_compact`
+
+**Payload:**
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `session_id` | string | |
+| `workspace` | string | |
+| `did_compact` | boolean | Whether compaction actually ran |
+| `summary` | string | Summary text, or empty when nothing was compacted |
+| `first_kept_index` | integer | Events kept verbatim. `0` when nothing was compacted |
+| `tokens_before` | integer | Estimated tokens before compaction |
+| `message` | string | Status message (`Auto-compacted context`, `Nothing to compact`, etc.) |
+
+Fires after compaction completes. Reply to acknowledge. `allow: false` has no
+effect.
+
+## Session entries
+
+The `entries` field on `session_before_compact` is a JSON array of every event in
+the current session, in order. Each object has a `type` field:
+
+| `type` | Fields | Meaning |
+| --- | --- | --- |
+| `user` | `role`, `content` | User message |
+| `assistant` | `role`, `content`, optional `model`, `provider`, `requested_model`, `usage` | Assistant message |
+| `tool_result` | `id`, `output`, `is_error`, optional `images` | Standalone tool result event |
+| `compaction` | `summary`, `first_kept_index`, `tokens_before`, optional `details` | Prior compaction |
+| `extension` | `extension`, `data` | Extension bookkeeping from `entry` replies |
+| `name` | `name` | Session title from `/name` |
+| `selection` | `provider`, `model` | Provider/model selection event |
+
+**`content` arrays** inside `user` and `assistant` messages contain typed parts:
+
+| Part `type` | Fields |
+| --- | --- |
+| `text` | `text` |
+| `tool_use` | `id`, `name`, `input`, optional `parse_error`, `hosted`, `thought_signature` |
+| `thinking` | `thinking`, `signature` |
+| `tool_result` | `tool_use_id`, `content`, `is_error`, optional `images` |
+| `image` | `mimeType`, `path` or `data` |
+| `file` | `mimeType`, `path` or `data`, optional `filename` |
+| `source` | `url`, `title`, optional `id`, `cited_text`, `raw` |
+
+The workspace path is not in `entries`. It is only on the session file header line.
+
+## Side effects
+
+These fields can appear on any `response` or unsolicited `update` line.
+
+### `status`
+
+```json
+{"key": "job", "text": "researching"}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `key` | string | Short identifier. Namespaced as `<extension-name>:<key>` |
+| `text` | string | Shown in the footer. Empty string removes this status |
+
+### `widget`
+
+```json
+{"key": "agents", "lines": ["✓ research", "… tests"], "placement": ""}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `key` | string | Namespaced like status |
+| `lines` | string array | Lines drawn above the footer. Empty array removes the widget |
+| `placement` | string | Accepted but not used by the TUI today |
+
+### `notification`
+
+```json
+{"level": "info", "message": "Research complete"}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `level` | string | `error` and `warning` are styled. Anything else (including `info`) is plain text |
+| `message` | string | Printed in the transcript |
+
+### `entry`
+
+Arbitrary JSON stored in the session under your extension name:
+
+```json
+{"count": 1, "phase": "research"}
+```
+
+Written as a session event:
+
+```json
+{"type": "extension", "extension": "lifecycle", "data": {"count": 1}}
+```
+
+`entry` data is never sent to the model. It persists across `/resume` and is the
+right place for extension state you need when the process restarts.
+
+## Tool capabilities
+
+| Capability | Meaning |
+| --- | --- |
+| `read` | Reads data, changes nothing |
+| `user` | Talks to the user rather than the world |
+| `write` | Changes files |
+| `shell` | Runs commands |
+| `network` | Reaches the network |
+
+A tool whose capabilities are only `read` and/or `user` is offered in plan mode as
+well as act mode. Omitting `capabilities` counts as `write`, `shell`, and
+`network`, so the tool stays act-only.
+
+Built-in names you cannot register: `ask_user`, `bash`, `edit`, `git`, `glob`,
+`grep`, `read`, `read_skill`, `write`.
+
+Extension tools use the normal permission prompt the first time, keyed as
+`tool:<name>`. `--tools` filters extension tools the same way as built-ins.
+
+:::caution[Answer every request]
+Nimlet waits for a reply to each `tool`, `command`, and `event` request. If you
+stay silent, nimlet waits for `response_timeout_seconds` and continues with a
+warning. When you have nothing to change, reply with
+`{"type":"response","id":"<id>"}`.
+:::
+
+Failures are fail-open: if an extension crashes, times out, or returns malformed
+JSON, nimlet reports a warning and the session continues without that extension's
+contribution.
+
+## Examples
+
+### A small Python extension
 
 ```python title=".nimlet/extensions/notes/extension.py"
 #!/usr/bin/env python3
@@ -127,7 +664,8 @@ send({"type": "register",
           "description": "Save a note about the current work.",
           "input_schema": {"type": "object",
                            "properties": {"text": {"type": "string"}},
-                           "required": ["text"]}
+                           "required": ["text"]},
+          "capabilities": ["read"]
       }]})
 
 for line in sys.stdin:
@@ -150,225 +688,12 @@ for line in sys.stdin:
 ```
 
 Make it executable (`chmod +x extension.py`), then `/reload`. `/note remember the
-cache bug` appends a line to `NOTES.md`, and the model can call `save_note` when it
-has an insight worth keeping.
+cache bug` appends a line to `NOTES.md`, and the model can call `save_note`.
 
-:::caution[Answer every request]
-nimlet waits for a reply to each request it sends, and events are requests too. If
-an extension stays silent, nimlet waits for `response_timeout_seconds` and then
-carries on with a warning. When you have nothing to change, reply with just
-`{"type":"response","id":"<id>"}`.
-:::
+### Guarding shell commands
 
-## The same protocol from JavaScript
-
-The protocol is JSON lines over stdin and stdout, so a web developer does not need
-a shim, a client library, or a bundle: a single `.mjs` file and Node's standard
-library are enough. This extension adds a `/todos` command and a `list_todos` tool
-that both scan the repository.
-
-```json title=".nimlet/extensions/todos/extension.json"
-{
-  "name": "todos",
-  "command": ["./extension.mjs"],
-  "response_timeout_seconds": 60
-}
-```
-
-```js title=".nimlet/extensions/todos/extension.mjs"
-#!/usr/bin/env node
-import { readdirSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import readline from 'node:readline'
-
-const send = (message) => process.stdout.write(JSON.stringify(message) + '\n')
-const SKIP = new Set(['node_modules', 'dist', 'build', '.git', '.next', '.turbo'])
-const WANTED = /\.(m?[jt]sx?|css|html|vue|svelte|md)$/
-
-function* walk(dir = '.') {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (SKIP.has(entry.name)) continue
-    const path = `${dir}/${entry.name}`
-    if (entry.isDirectory()) yield* walk(path)
-    else if (WANTED.test(entry.name)) yield path
-  }
-}
-
-async function findTodos() {
-  const found = []
-  for (const path of walk()) {
-    const text = await readFile(path, 'utf8').catch(() => '')
-    text.split('\n').forEach((line, index) => {
-      if (/\b(TODO|FIXME)\b/.test(line)) {
-        found.push(`${path}:${index + 1}  ${line.trim()}`)
-      }
-    })
-  }
-  return found
-}
-
-async function handle(message) {
-  switch (message.type) {
-    case 'command': {
-      const found = await findTodos()
-      send({ type: 'response', id: message.id, message: `${found.length} TODO comments` })
-      break
-    }
-    case 'tool': {
-      const found = await findTodos()
-      send({
-        type: 'response',
-        id: message.id,
-        content: found.slice(0, 50).join('\n') || 'No TODO or FIXME comments.',
-      })
-      send({ type: 'update', status: { key: 'todos', text: found.length ? `${found.length} TODOs` : '' } })
-      break
-    }
-    case 'event':
-      send({ type: 'response', id: message.id }) // a silent event stalls the turn
-      break
-    case 'shutdown':
-      process.exit(0)
-  }
-}
-
-send({
-  type: 'register',
-  commands: [{ name: 'todos', description: 'List TODO and FIXME comments' }],
-  tools: [{
-    name: 'list_todos',
-    description: 'List TODO and FIXME comments as path:line text.',
-    input_schema: { type: 'object', properties: {} },
-    capabilities: ['read'],
-  }],
-})
-
-const input = readline.createInterface({ input: process.stdin })
-for await (const line of input) {
-  if (line.trim()) await handle(JSON.parse(line))
-}
-```
-
-```sh
-chmod +x .nimlet/extensions/todos/extension.mjs
-```
-
-then `/reload`, and `/todos` works. A few notes for this style of extension:
-
-- **The loop must await each handler.** Two lines can be read before the first
-  reply is written, and then the replies race. Awaiting keeps the ordering
-  obvious; replies are still matched by `id`, so sending them out of order is
-  allowed, just harder to reason about.
-- **`capabilities: ['read']` is what puts `list_todos` in plan mode.** The `/todos`
-  command needs no switch, because commands are yours to run, not the model's.
-- **Windows cannot launch a `.mjs` directly.** Add a one-line wrapper and point the
-  manifest at it - the runtime launches `.cmd` and `.bat` files through `cmd.exe`:
-
-  ```bat title=".nimlet/extensions/todos/extension.cmd"
-  @echo off
-  node "%~dp0extension.mjs" %*
-  ```
-
-- **TypeScript works the same way.** Write it in TS, compile (or let `tsx` run it),
-  and point `command` at the compiled entry point. The manifest never knows which
-  language answers, which is why the protocol is worth learning once.
-- **Your extension runs with the workspace as its current directory**, so
-  `child_process` can drive your existing tooling - `execFile('npx', ['tsc',
-  '--noEmit'])` inside a tool handler is a perfectly normal extension. Nothing
-  prompts for approval there: extensions are programs you installed, which is why
-  the project trust question exists.
-
-## What nimlet sends
-
-| Request | When | Reply |
-| --- | --- | --- |
-| `tool` | The model calls one of your tools | `content` (a string), `is_error` |
-| `command` | You type the registered slash command | `message` to display, `prompt` to start a turn |
-| `event` | A lifecycle event you registered for | `allow`, `reason`, plus the fields below |
-| `cancel` | The user interrupted while you were working | None needed |
-| `shutdown` | nimlet is exiting or reloading | None needed |
-
-Every request carries an `id` and every reply must echo it. Replies are matched by
-id, so an extension can have several requests in flight at once.
-
-Both `message` and `prompt` can appear in a command reply: the message is printed,
-and the prompt becomes your next turn. That is how an extension offers something
-the model should act on.
-
-## Tools
-
-A registered tool behaves like a built-in one:
-
-- The model sees its name, description, and input schema.
-- Calling it raises the usual approval prompt the first time, keyed as
-  `tool:<name>`, and `/permissions` lists the grant afterwards.
-- The result is saved in the session like any other tool result.
-
-`capabilities` is a promise about what the tool does, and it decides two things:
-where the tool is available, and how it is treated. The values are:
-
-| Capability | Meaning |
-| --- | --- |
-| `read` | Reads data, changes nothing |
-| `user` | Talks to you rather than the world |
-| `write` | Changes files |
-| `shell` | Runs commands |
-| `network` | Reaches the network |
-
-A tool whose capabilities are only `read` and/or `user` is offered in plan mode as
-well as act mode. Anything else, including a manifest that lists no capabilities at
-all - that counts as `write`, `shell`, and `network` - stays act-only. Both cases
-still ask for approval the first time.
-
-Two constraints sit on top of that. A tool whose name collides with a built-in is
-skipped with a warning at startup. And `--tools` filters extension tools exactly
-like built-ins, so `--tools read` means an extension tool only survives if its name
-is in the allowlist.
-
-## Events
-
-These are the events an extension can register for, the payload you receive, and
-what a reply can change:
-
-| Event | Payload | A reply can |
-| --- | --- | --- |
-| `tool_call` | `tool`, `arguments` | Deny it, or replace `arguments` |
-| `tool_result` | `tool`, `arguments`, `output`, `is_error` | Replace `output` or `is_error` |
-| `turn_start` | `session_id`, `workspace` | Report or deny |
-| `turn_end` | `session_id`, `workspace`, and `interrupted` when you stopped the turn | Report or deny |
-| `session_start`, `session_end` | `session_id`, `workspace` | Report or deny |
-| `session_before_compact` | `session_id`, `workspace`, `instruction`, `tokens_before`, `entries` (every event in the session) | Add an `instruction`, or supply a whole `compaction` |
-| `session_compact` | `session_id`, `workspace`, `did_compact`, `summary`, `first_kept_index`, `tokens_before`, `message` | Report |
-
-A reply can always carry the action fields described below, on any event, whether
-or not it changes anything.
-
-Denying looks like this:
-
-```json
-{"type":"response","id":"9","allow":false,"reason":"Not while tests are running"}
-```
-
-The reason reaches the model as the tool result, so it understands why. A
-`tool_call` reply can also rewrite the call before it runs:
-
-```json
-{"type":"response","id":"9","arguments":{"path":"src/main.py"}}
-```
-
-Failures are fail-open: if an extension crashes, times out, or replies with
-something malformed, nimlet reports a warning and the session continues without
-its contribution. Register only the events you need - every event you list is a
-round trip the turn waits on, so a hook that only matters occasionally still costs
-a message per tool call.
-
-Events do not fire at all in plan mode.
-
-### A second example: guarding shell commands
-
-This one registers for two events, denies a category of command, and keeps a
-counter in the footer. It also shows the discipline that events need: the handler
-answers *every* request, including the ones it does not act on.
+Registers for `tool_call` and `turn_end`. Denies blocked commands and counts them
+in a footer widget. Answers every event, including ones it does not act on:
 
 ```python title=".nimlet/extensions/guard/extension.py"
 #!/usr/bin/env python3
@@ -403,105 +728,66 @@ for line in sys.stdin:
     send(reply)
 ```
 
-`turn_end` arrives on every turn and the loop answers it without changing
-anything, which is the whole point: an unanswered event is a stall, not a no-op.
+### JavaScript
 
-## Pushing updates without being asked
+The protocol is JSON lines over stdin and stdout. A single `.mjs` file and Node's
+standard library are enough:
 
-A reply can carry extra fields, and the same shape can be sent at any time as an
-`update`:
+```js title=".nimlet/extensions/todos/extension.mjs"
+#!/usr/bin/env node
+import { readdirSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import readline from 'node:readline'
 
-```json
-{"type":"update",
- "status":{"key":"job","text":"researching"},
- "widget":{"key":"agents","lines":["✓ research","… tests"]},
- "notification":{"level":"info","message":"Research complete"},
- "entry":{"completed":["research"]}}
+const send = (message) => process.stdout.write(JSON.stringify(message) + '\n')
+
+send({
+  type: 'register',
+  commands: [{ name: 'todos', description: 'List TODO and FIXME comments' }],
+  tools: [{
+    name: 'list_todos',
+    description: 'List TODO and FIXME comments as path:line text.',
+    input_schema: { type: 'object', properties: {} },
+    capabilities: ['read'],
+  }],
+  events: ['turn_end'],
+})
+
+async function handle(message) {
+  switch (message.type) {
+    case 'event':
+      send({ type: 'response', id: message.id })
+      break
+    case 'shutdown':
+      process.exit(0)
+  }
+}
+
+const input = readline.createInterface({ input: process.stdin })
+for await (const line of input) {
+  if (line.trim()) await handle(JSON.parse(line))
+}
 ```
 
-| Field | Where it goes |
+On Windows, wrap `.mjs` files in a `.cmd` that calls `node "%~dp0extension.mjs" %*`.
+
+## Reloading, timeouts, and errors
+
+| Situation | What happens |
 | --- | --- |
-| `status` | A short line in the status footer. Empty `text` removes it |
-| `widget` | Extra lines drawn above the footer. Empty `lines` removes it |
-| `notification` | A message in the transcript; `level` of `error` or `warning` styles it |
-| `entry` | Appended to the session under the extension's name |
+| `/reload`, `/new`, `/resume`, trust change | Extensions restart with a new `initialize` |
+| Request timeout | `extension response timed out`. The tool call fails; the turn continues |
+| `response_timeout_seconds: null` | No timeout. Use only when the extension always answers |
+| `shutdown` | Sent on clean exit. Process is terminated if still running after a brief wait |
+| Invalid `register` | Warning at startup. Extension is not loaded |
+| Runtime parse error | Warning. Extension keeps running |
+| Built-in tool name collision | Tool skipped with a warning |
 
-Keys are namespaced with the extension name automatically, so two extensions can
-both use a key called `state` without colliding.
-
-`entry` data is durable: it is stored in the session file and comes back when the
-session is resumed. It is never sent to the model, so it is the right place for
-bookkeeping a compiled-in extension needs to reload later - an external process
-reads its own state from disk.
-
-## Asking the user
-
-An extension can ask a question and continue afterwards:
-
-```json
-{"type":"ui_request","id":"q1","method":"question","prompt":"Which environment?","options":["staging","production"]}
-```
-
-Nimlet answers with:
-
-```json
-{"type":"ui_response","id":"q1","answer":"staging","cancelled":false}
-```
-
-Time spent waiting for that answer does not count against the response timeout. In
-a headless run (`-p`, `--mode json`, `--mode rpc`) there is nobody to ask, so the
-answer comes back empty with `cancelled` set to true.
-
-## Reloading, timeouts, and shutdown
-
-- `/reload` stops and restarts every extension, which is how you pick up edited
-  code. `/new`, `/resume`, and a trust change restart them too, with the new
-  session id in `initialize`.
-- A request that never arrives in time produces
-  `extension response timed out`; the tool call fails with that message and the
-  turn continues.
-- `"response_timeout_seconds": null` means no timeout at all. Only use it when the
-  extension always answers: otherwise the turn waits forever.
-- On clean exit nimlet sends `{"type":"shutdown"}`, waits briefly, and terminates
-  the process if it is still running.
-- An extension that fails to start is reported as a warning, never as a fatal
-  error: `extension 'notes' failed to start: …`.
-
-## When something goes wrong
-
-Everything here is a warning or a failed tool call, never a crash:
-
-| Message | What happened |
-| --- | --- |
-| `skipping <dir>: missing name` | `extension.json` is not valid JSON or has no `name`/`command` |
-| A tool error about JSON parsing | Your tool reply line was not valid JSON |
-| `extension 'x' failed to start: expected register response` | The first line was not a `register` object |
-| `register commands must be an array` | `commands` was missing or not an array |
-| `register events must be strings` | `events` held something other than strings |
-| `registered tools require name, description, and input_schema` | A tool entry was incomplete |
-| `invalid capabilities for tool 'x': unknown capability: y` | A capability name is not one of the five |
-| `extension tool 'bash' collides with a built-in tool` | The tool was skipped |
-| `extension response timed out` | No reply within `response_timeout_seconds` |
-| `extension 'x' …` plus a timeout on every call | The process died; check that it still runs |
-
-Registration failures stop the process deliberately. Runtime failures do not: the
-extension keeps running and the next request gets its own chance.
-
-## Debugging an extension
-
-**stdout belongs to the protocol.** One JSON object per line, nothing else. A stray
-`print` in your code corrupts the stream and you will see parse errors, not
-warnings. Write logs to a file instead. nimlet does not read your stderr either, so
-do not treat it as a log sink that can absorb unlimited output.
-
-**Run it by hand first.** The `register` line is sent before your loop reads
-anything, so this alone tells you the manifest and the shebang work:
+**Debugging:**
 
 ```sh
 ./.nimlet/extensions/notes/extension.py </dev/null
 ```
-
-To exercise a whole conversation, feed it the same lines nimlet would:
 
 ```sh
 printf '%s\n' \
@@ -510,11 +796,7 @@ printf '%s\n' \
   '{"type":"shutdown"}' | ./.nimlet/extensions/notes/extension.py
 ```
 
-**Then `/reload`.** Edited code is only picked up when the extension restarts, and
-`/reload` does that without losing the session. If a change seems to have no
-effect, check the simpler explanation first: extensions are not overridden by name,
-so a global and a project extension with the same name both run, and the one you
-edited may not be the one answering.
+Stdout is the protocol. Write logs to a file, not stderr.
 
 ## Discovery roots compared
 
@@ -525,10 +807,10 @@ edited may not be the one answering.
 | `tool.json` tools | `~/.nimlet/tools`, `.agent/tools`, `.nimlet/tools` | Yes |
 | Extensions | `~/.agents/extensions`, `~/.nimlet/extensions`, `.agents/extensions`, `.nimlet/extensions` | No, every one starts |
 
-Project roots in every row are skipped until you trust the project.
+Project roots are skipped until you trust the project.
 
 ## Where to go next
 
-- [Skills](/guides/skills/) for procedures that are only Markdown
-- [Permissions](/guides/permissions/) for what an extension tool asks before it runs
-- [Context and compaction](/guides/context-and-compaction/) for the compaction events
+- [Permissions](/guides/permissions/) for extension tool approval prompts
+- [Context and compaction](/guides/context-and-compaction/) for what compaction does
+- [External tools](/guides/external-tools/) for one-shot executables instead of persistent processes

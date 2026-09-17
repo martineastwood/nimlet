@@ -23,9 +23,14 @@ below when testing a tool call.
 | `ask_user` | Ask the user a multiple-choice question | User |
 
 `--tools` can restrict the set, for example `--tools read,grep,glob` or
-`--tools none`. The path-taking tools accept workspace-relative paths only.
-Symlink escapes outside the workspace are rejected, including when an existing
-symlink points elsewhere.
+`--tools none`. The restriction applies to extension tools as well as built-ins.
+The path-taking tools accept workspace-relative paths only. Symlink escapes
+outside the workspace are rejected, including when an existing symlink points
+elsewhere.
+
+Independent `read`, `grep`, `glob`, and `read_skill` calls in the same model
+response can run in parallel. Other tools run one at a time in the order the
+model requested them.
 
 ## Read and search
 

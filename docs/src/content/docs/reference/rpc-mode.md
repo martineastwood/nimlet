@@ -62,6 +62,11 @@ The response includes `session_id`, boolean `busy` and `queued`, counts named
 `steering` and `follow_up`, the configured `steering_mode` and
 `follow_up_mode`, and the current `mode`, either `act` or `plan`.
 
+Plan and act mode are not RPC commands. `get_state` reports the current mode,
+but there is no `set_mode` command. Switch modes from the interactive TUI with
+`/plan`, `/act`, or `Shift+Tab`, or start RPC in the mode you need. RPC always
+starts in act mode.
+
 Queue delivery modes are independently configurable:
 
 ```json

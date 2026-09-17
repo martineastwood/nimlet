@@ -179,10 +179,10 @@ repository. The setting is saved as `agent.web_search`.
 
 ## Images and attachments
 
-When you attach an image, or paste one, nimlet checks the catalog before sending
-it. Models that accept image input get the image; models that do not have images
-dropped from the request rather than failing the turn. Unknown models are assumed
-to accept them.
+When you attach an image with `@` or by pasting an image file path, nimlet checks
+the catalog before sending it. Models that accept image input get the image;
+models that do not have images dropped from the request rather than failing the
+turn. Unknown models are assumed to accept them.
 
 ## Costs in /stats
 
