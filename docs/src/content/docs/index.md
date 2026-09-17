@@ -3,8 +3,8 @@ title: nimlet
 description: A local coding agent for your repository. A native binary with fast startup, low memory, and idle CPU until it works.
 template: splash
 hero:
-  title: A local coding agent
-  tagline: Fast to start, light on memory, idle until it works.
+  title: Nimlet Coding Agent
+  tagline: Fast to start, light on memory, no CPU until you ask.
   actions:
     - text: Get started
       link: /guides/quickstart/
@@ -16,8 +16,8 @@ hero:
       icon: external
 ---
 
-<div class="landing-shell">
-  <p class="landing-lede">Run Nimlet in a repository, describe the change you want, and it inspects files, edits them, runs the commands you approve, and keeps the session. Extend it in any language: a program that reads and writes JSON is enough. Credentials stay on your machine. Requests go straight to the provider you pick.</p>
+<div class="landing-shell not-content">
+  <p class="landing-lede">Point Nimlet at a repo, describe the change, and it inspects, edits, runs the commands you approve, and keeps the session. Extend it in any language so it works the way you do.</p>
 
   <section class="landing-terminal" aria-labelledby="landing-terminal-title">
     <div class="landing-terminal-bar">

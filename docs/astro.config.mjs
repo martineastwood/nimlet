@@ -1,7 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import starlightThemeBlack from 'starlight-theme-black';
+import starlightThemeNext from 'starlight-theme-next';
 
 export default defineConfig({
 	site: 'https://nimlet.niminal.dev',
@@ -42,12 +42,7 @@ export default defineConfig({
 				{ label: 'Files and directories', slug: 'reference/files-and-directories' },
 				{ label: 'Architecture', slug: 'reference/architecture' },
 			],
-			plugins: [
-				starlightThemeBlack({
-					navLinks: [{ label: 'Niminal', link: 'https://niminal.dev' }],
-					docs: { showMarkdownActions: false },
-				}),
-			],
+			plugins: [starlightThemeNext()],
 		}),
 	],
 });
