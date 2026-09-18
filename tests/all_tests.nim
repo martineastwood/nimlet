@@ -732,10 +732,9 @@ suite "black-box terminal integration":
     check controller.awaitingApproval
     backend.feed("\r")
     for _ in 0 .. 10: discard app.step()
-    ## Creating a native Git Bash/PowerShell child has measurable startup
-    ## cost on Windows. Poll until the turn settles rather than relying on a
-    ## fixed delay that is fragile on a busy Windows host.
-    let deadline = epochTime() + (if defined(windows): 5.0 else: 1.0)
+    ## Creating a native shell child has measurable startup cost. Poll until
+    ## the turn settles rather than relying on a fixed delay.
+    let deadline = epochTime() + 5.0
     while controller.busy and epochTime() < deadline:
       discard app.step()
       waitFor sleepAsync(25)
