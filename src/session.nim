@@ -284,6 +284,12 @@ proc parseEvent(node: JsonNode): SessionEvent =
   else:
     raise newException(ValueError, "unknown session event")
 
+proc parseMessageJson*(node: JsonNode): Message =
+  let event = parseEvent(node)
+  if event.kind notin {sekUser, sekAssistant}:
+    raise newException(ValueError, "message type must be user or assistant")
+  event.message
+
 proc initSession*(path = "", id = ""): Session =
   result.id = if id.len > 0: id else: $int(epochTime() * 1_000_000)
   result.path = path
@@ -473,6 +479,17 @@ proc messagesForModel*(session: Session): seq[Message] =
       "The conversation history before this point was compacted into the following summary:\n" &
       "<summary>\n" & summary & "\n</summary>")
   result.add session.messagesFrom(startIdx)
+
+proc messagesJson*(messages: openArray[Message]): JsonNode =
+  result = newJArray()
+  for message in messages:
+    result.add eventJson(if message.role == roleAssistant:
+      SessionEvent(kind: sekAssistant, message: message)
+    else:
+      SessionEvent(kind: sekUser, message: message))
+
+proc messagesForModelJson*(session: Session): JsonNode =
+  messagesJson(session.messagesForModel)
 
 proc loadSession*(sessionDir: string, id = "", workspace = ""): Session =
   ## New session when `id` is empty; otherwise resume an existing JSONL file.

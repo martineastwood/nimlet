@@ -6,6 +6,7 @@ import nimterm/widgets/question
 import nimterm/theme
 import ../events
 import ../session
+import ../editor
 import console
 import ../permissions
 import std/asyncdispatch
@@ -25,6 +26,9 @@ type
     agentEvent*: proc (event: NimletEvent) {.closure.}
     question*: proc (prompt: string,
                      options: seq[QuestionOption]): Future[QuestionAnswer] {.closure.}
+    promptText*: proc (prompt: string, secret: bool): Future[QuestionAnswer] {.closure.}
+    editText*: proc (title, text: string): Future[ExternalEditResult] {.closure.}
+    enqueueMessage*: proc (content, deliverAs: string) {.closure.}
     toolStart*: proc (call: ContentBlock) {.closure.}
     approval*: proc (call: ContentBlock,
                      reason: string): Future[PermissionDecision] {.closure.}

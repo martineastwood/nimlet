@@ -238,9 +238,11 @@ type
   TestProvider = ref object of Provider
     responses: seq[ProviderResponse]
     callCount: int
+    requests: seq[ProviderRequest]
 
 method generateAsync(provider: TestProvider,
                      request: ProviderRequest): Future[ProviderResponse] {.async.} =
+  provider.requests.add request
   result = provider.responses[min(provider.callCount, provider.responses.high)]
   inc provider.callCount
 
@@ -4084,7 +4086,8 @@ read shutdown
 read init
 echo '{"type":"register","commands":[],"tools":[{"name":"ext_echo","description":"Echo through the extension","input_schema":{"type":"object"},"capabilities":["read"]}]}'
 read request
-echo '{"type":"response","id":"1","content":"extension tool result","is_error":false}'
+echo '{"type":"tool_update","id":"1","content":"halfway"}'
+echo '{"type":"response","id":"1","content":[{"type":"text","text":"extension tool result"},{"type":"image","mimeType":"image/png","path":"shot.png"}],"is_error":false}'
 read shutdown
 """)
     setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
@@ -4099,9 +4102,14 @@ read shutdown
       if definition.name == "ext_echo": visibleInPlan = true
     check visibleInPlan
     agent.mode = modeAct
-    let output = waitFor agent.tools.execute("ext_echo", %*{})
+    var updates: seq[string]
+    let output = waitFor agent.tools.execute("ext_echo", %*{},
+      onOutput = proc(text: string) = updates.add text)
     check not output.isError
     check output.output == "extension tool result"
+    check output.images.len == 1
+    check output.images[0].path == "shot.png"
+    check updates == @["halfway"]
 
   test "subscribed lifecycle events mutate tools and replace compaction":
     let root = freshDir()
@@ -4176,6 +4184,188 @@ read shutdown
     check agent.processInput("/choose", ui)
     check asked
     check messages == @["choice received"]
+
+  test "extension requests confirm, input, and masked password UI":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "dialogs")
+    let dir = root / ".nimlet" / "extensions" / "dialogs"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "dialogs", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[{"name":"dialogs"}]}'
+read command
+echo '{"type":"ui_request","id":"confirm","method":"confirm","prompt":"Continue?"}'
+read confirmed
+printf '%s\n' "$confirmed" > confirmed.json
+echo '{"type":"ui_request","id":"input","method":"input","prompt":"Branch?"}'
+read input
+printf '%s\n' "$input" > input.json
+echo '{"type":"ui_request","id":"password","method":"password","prompt":"Token?"}'
+read password
+printf '%s\n' "$password" > password.json
+echo '{"type":"response","id":"1","message":"done"}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    var ui = consoleSink()
+    ui.question = proc(prompt: string,
+        options: seq[QuestionOption]): Future[QuestionAnswer] {.async.} =
+      check prompt == "Continue?"
+      return QuestionAnswer(text: "Yes")
+    ui.promptText = proc(prompt: string,
+        secret: bool): Future[QuestionAnswer] {.async.} =
+      return QuestionAnswer(text: if secret: "secret-token" else: "feature")
+    check agent.processInput("/dialogs", ui)
+    check parseJson(readFile(root / "confirmed.json"))["confirmed"].getBool
+    check parseJson(readFile(root / "input.json"))["answer"].getStr == "feature"
+    check parseJson(readFile(root / "password.json"))["answer"].getStr ==
+      "secret-token"
+
+  test "context hooks add system instructions and messages":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "context")
+    let dir = root / ".nimlet" / "extensions" / "context"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "context", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[],"events":["context"]}'
+read event
+echo '{"type":"response","id":"1","system":["Injected system"],"messages":[{"type":"user","role":"user","content":[{"type":"text","text":"Injected context"}]}]}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.compactionEnabled = false
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    let provider = TestProvider(name: "test", responses: @[
+      ProviderResponse(model: "test", content: @[text("done")],
+        finishReason: frEndTurn)])
+    agent.provider = provider
+    var ui = consoleSink()
+    ui.emit = proc(level: MsgLevel, text: string) = discard
+    ui.commitGenerate = proc(response: ProviderResponse, final: bool) = discard
+    check agent.processInput("original", ui)
+    check "Injected system" in provider.requests[0].system
+    check sessionMessageText(provider.requests[0].messages[^1]) ==
+      "Injected context"
+
+  test "extension updates enqueue user messages":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "messages")
+    let dir = root / ".nimlet" / "extensions" / "messages"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "messages", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[]}'
+echo '{"type":"update","user_message":{"content":"background done","deliver_as":"follow_up"}}'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    var queued: seq[(string, string)]
+    var ui = consoleSink()
+    ui.enqueueMessage = proc(content, deliverAs: string) =
+      queued.add (content, deliverAs)
+    for _ in 0 ..< 100:
+      agent.extensionRuntime.pump()
+      (addr agent).applyExtensionActions(ui)
+      if queued.len > 0: break
+      sleep(10)
+    check queued == @[("background done", "follow_up")]
+
+  test "command can complete a model request, edit text, and hand off sessions":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "handoff")
+    let dir = root / ".nimlet" / "extensions" / "handoff"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "handoff", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[{"name":"handoff","description":"Hand off"}]}'
+while read command; do
+  case "$command" in
+    *\"type\":\"shutdown\"*) exit 0 ;;
+  esac
+  printf '%s\n' "$command" > command.json
+  echo '{"type":"host_request","id":"info","method":"session.info"}'
+  read info
+  printf '%s\n' "$info" > info.json
+  echo '{"type":"host_request","id":"name","method":"session.name","name":"handoff source"}'
+  read name
+  printf '%s\n' "$name" > name.json
+  echo '{"type":"host_request","id":"usage","method":"context.usage"}'
+  read usage
+  printf '%s\n' "$usage" > usage.json
+  echo '{"type":"host_request","id":"model","method":"model.complete","system_prompt":"Summarize","prompt":"history","max_tokens":123}'
+  read model
+  printf '%s\n' "$model" > model.json
+  echo '{"type":"host_request","id":"editor","method":"ui.editor","title":"Edit handoff","text":"draft"}'
+  read editor
+  printf '%s\n' "$editor" > editor.json
+  echo '{"type":"response","id":"1","session":{"action":"new","editor_text":"edited handoff"}}'
+done
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    var config = loadConfig(root, root / "config.json")
+    config.sessionDir = root / "sessions"
+    config.model = "test/model"
+    var agent = initAgent(config)
+    defer: agent.stopExtensions()
+    let oldSession = agent.session.id
+    agent.session.addUserMessage("existing context")
+    let provider = TestProvider(name: "test", responses: @[
+      ProviderResponse(model: "test/model", content: @[text("generated")],
+        finishReason: frEndTurn)])
+    agent.provider = provider
+    var editorText, composerText: string
+    var ui = consoleSink()
+    ui.editText = proc(title, text: string): Future[ExternalEditResult] {.async.} =
+      check title == "Edit handoff"
+      editorText = text
+      return ExternalEditResult(ok: true, text: "edited handoff")
+    ui.setEditorText = proc(text: string) = composerText = text
+    check agent.processInput("/handoff next task", ui)
+    check provider.callCount == 1
+    check editorText == "draft"
+    check composerText == "edited handoff"
+    check agent.session.id != oldSession
+    check agent.session.events.len == 0
+    let command = parseJson(readFile(root / "command.json"))
+    check command["context"]["messages"][0]["content"][0]["text"].getStr ==
+      "existing context"
+    check command["context"]["model"].getStr == "test/model"
+    let info = parseJson(readFile(root / "info.json"))["result"]
+    check info["id"].getStr == oldSession
+    check info["event_count"].getInt == 1
+    check parseJson(readFile(root / "name.json"))["result"]["name"].getStr ==
+      "handoff source"
+    let usage = parseJson(readFile(root / "usage.json"))["result"]
+    check usage["tokens"].getInt > 0
+    check usage["limit"].getInt > 0
+    check parseJson(readFile(root / "model.json"))["result"]["text"].getStr ==
+      "generated"
+    check parseJson(readFile(root / "editor.json"))["result"]["text"].getStr ==
+      "edited handoff"
 
   test "routes concurrent responses by id":
     let root = freshDir()
@@ -4644,8 +4834,11 @@ suite "cli prompt args":
     agent.provider = TestProvider(name: "test", responses: @[
       ProviderResponse(model: "test/model", content: @[
         toolUse("call-1", "read", %*{"path": "input.txt"})],
+        usage: Usage(inputTokens: 12, outputTokens: 5,
+          cacheReadTokens: 4, cacheReported: true),
         finishReason: frToolUse),
       ProviderResponse(model: "test/model", content: @[text("done")],
+        usage: Usage(inputTokens: 20, outputTokens: 3),
         finishReason: frEndTurn)])
     var output: seq[JsonNode]
     check agent.runJson("inspect", proc (event: JsonNode) = output.add event)
@@ -4661,6 +4854,11 @@ suite "cli prompt args":
     check "contents" in output[5]["output"].getStr
     check output[8]["role"].getStr == "assistant"
     check output[8]["content"].getStr == "done"
+    check output[6]["usage"] == %*{"input_tokens": 12, "output_tokens": 5,
+      "cache_read_tokens": 4, "cache_write_tokens": 0, "cache_reported": true}
+    check output[9]["usage"] == %*{"input_tokens": 20, "output_tokens": 3,
+      "cache_read_tokens": 0, "cache_write_tokens": 0, "cache_reported": false}
+    check not output[2].hasKey("usage")
     check output[^1]["success"].getBool
     let queued = queueEventJson("session", "enqueue", "next", 1)
     check queued == %*{"version": 1, "type": "queue",

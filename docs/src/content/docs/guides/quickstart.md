@@ -8,8 +8,22 @@ your `PATH`. Give it a provider credential, then run it from the workspace you
 want the agent to inspect or change. No language toolchain or source checkout is
 required to use nimlet.
 
-To build from source, install Nim 2.0 or later and run `nimble release`, which
-writes `build/nimlet`.
+## Install on macOS
+
+On macOS, install with Homebrew. The formula builds nimlet from source and pulls
+in OpenSSL, PCRE, and (by default) ripgrep:
+
+```sh
+brew tap martineastwood/nimlet https://github.com/martineastwood/nimlet
+brew install nimlet
+```
+
+Homebrew installs the `nimlet` binary on your `PATH`. Ripgrep is recommended so
+workspace search stays fast; nimlet still falls back to its built-in search if
+`rg` is not available.
+
+To build from a source checkout instead, install Nim 2.0 or later and run
+`nimble release`, which writes `build/nimlet`.
 
 ## Configure provider access
 

@@ -152,7 +152,7 @@ Your first stdout line. Nimlet blocks until it arrives or times out.
 | `input_schema` | object | yes | JSON Schema object for the tool arguments |
 | `capabilities` | string array | no | See [Tool capabilities](#tool-capabilities). Omitting means `write`, `shell`, and `network` |
 
-**`events[]` values:** one of the eight hook names in [Lifecycle events](#lifecycle-events).
+**`events[]` values:** one of the nine hook names in [Lifecycle events](#lifecycle-events).
 
 Registration is validated strictly. Invalid `register` lines fail startup with a
 warning and the process is stopped.
@@ -179,9 +179,15 @@ The model called one of your registered tools.
 | `name` | string | Tool name from your `register` |
 | `arguments` | object | Tool arguments from the model. `{}` when empty |
 
-Reply with `content` (string) and optional `is_error` (boolean, default `false`).
-You can include side-effect fields (`status`, `widget`, `notification`, `entry`)
-on the same `response` line.
+Reply with a `content` array and optional `is_error` (boolean, default `false`).
+Content parts are `{"type":"text","text":"..."}` or images with `mimeType`
+and either `path` or `data`. String content is not accepted.
+
+While the tool runs, send progress into the active tool display:
+
+```json
+{"type":"tool_update","id":"7","content":"Downloaded 40 of 100 files"}
+```
 
 ### `command`
 
@@ -192,7 +198,15 @@ You typed a registered slash command.
   "type": "command",
   "id": "3",
   "name": "note",
-  "arguments": "remember the cache bug"
+  "arguments": "remember the cache bug",
+  "context": {
+    "mode": "tui",
+    "workspace": "/home/you/code/project",
+    "session_id": "1789233281025102",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "messages": []
+  }
 }
 ```
 
@@ -202,6 +216,11 @@ You typed a registered slash command.
 | `id` | string | Reply id |
 | `name` | string | Command name from your `register` |
 | `arguments` | string | Plain text after the command. Empty string when you typed `/note` alone |
+| `context` | object | Current workspace, session, model selection, and effective model messages |
+
+`context.messages` contains the conversation nimlet would send to the model. If
+the session was compacted, it starts with the latest summary and includes the
+kept messages after it.
 
 Reply fields:
 
@@ -209,8 +228,30 @@ Reply fields:
 | --- | --- | --- |
 | `message` | string | Printed in the transcript |
 | `prompt` | string | If set, becomes the next user message and starts a turn |
+| `session` | object | Runs a session action after your command returns |
+| `reload` | boolean | Reloads project resources after your command returns |
 
-Both can appear together: print `message`, then run `prompt`.
+`message` and `prompt` can appear together: nimlet prints the message, then runs
+the prompt.
+
+Session actions run after nimlet receives your response, so the extension can
+finish its command before a switch restarts extension processes:
+
+```json
+{
+  "type": "response",
+  "id": "3",
+  "session": {
+    "action": "new",
+    "editor_text": "Review this handoff, then submit it."
+  }
+}
+```
+
+Supported actions are `new`, `fork`, `switch`, and `compact`. `fork` takes a
+one-based `message` number, `switch` takes a session `id`, and `compact` accepts
+an optional `instruction`. `editor_text` applies after `new`, `fork`, or
+`switch` without submitting the text.
 
 ### `event`
 
@@ -271,7 +312,7 @@ Nimlet is exiting or reloading. No reply needed. Stop your loop after this.
 Reply to a `tool`, `command`, or `event` request. Always echo the request `id`.
 
 ```json
-{"type": "response", "id": "7", "content": "Saved.", "is_error": false}
+{"type":"response","id":"7","content":[{"type":"text","text":"Saved."}],"is_error":false}
 ```
 
 Fields nimlet reads depend on what you are replying to:
@@ -280,10 +321,12 @@ Fields nimlet reads depend on what you are replying to:
 | --- | --- | --- | --- |
 | `type` | `"response"` | all | |
 | `id` | string | all | Must match the request |
-| `content` | string | `tool` | Tool result text |
+| `content` | array | `tool` | Typed text and image result parts |
 | `is_error` | boolean | `tool` | Whether the tool failed |
 | `message` | string | `command` | Text printed to the user |
 | `prompt` | string | `command` | Starts a new turn with this text |
+| `session` | object | `command` | Runs `new`, `fork`, `switch`, or `compact` after the response |
+| `reload` | boolean | `command` | Reloads project resources after the response |
 | `allow` | boolean | `tool_call`, `session_before_compact` | `false` blocks the action |
 | `reason` | string | `tool_call`, `session_before_compact` | Shown to the model or user when blocked |
 | `arguments` | object | `tool_call` | Replaces the tool arguments before execution |
@@ -295,6 +338,7 @@ Fields nimlet reads depend on what you are replying to:
 | `widget` | object | any | Lines above the footer |
 | `notification` | object | any | Transcript message |
 | `entry` | any JSON | any | Durable session data |
+| `user_message` | object | any | Queue `content` as `now`, `steer`, or `follow_up` |
 
 **`compaction` object** (on `session_before_compact` replies):
 
@@ -314,12 +358,17 @@ Unsolicited side effects. No `id` required. Same side-effect fields as `response
   "status": {"key": "job", "text": "researching"},
   "widget": {"key": "agents", "lines": ["✓ research", "… tests"]},
   "notification": {"level": "info", "message": "Research complete"},
-  "entry": {"completed": ["research"]}
+  "entry": {"completed": ["research"]},
+  "user_message": {"content": "Tests finished", "deliver_as": "follow_up"}
 }
 ```
 
 You can send `update` while a request is in flight, including from another thread,
 as long as each line is valid JSON.
+
+`user_message.deliver_as` is `now`, `steer`, or `follow_up`. `now` starts a turn
+when nimlet is idle and otherwise waits for the current turn. `steer` enters at
+the next tool boundary. `follow_up` waits until the current turn finishes.
 
 ### `ui_request` and `ui_response`
 
@@ -339,7 +388,7 @@ Ask the user a multiple-choice question from inside a `tool` or `command` handle
 | --- | --- | --- |
 | `type` | `"ui_request"` | |
 | `id` | string | Matched on the response |
-| `method` | `"question"` | Only supported method today |
+| `method` | string | `question`, `confirm`, `input`, or `password` |
 | `prompt` | string | Question text |
 | `options` | string array | Choices shown to the user |
 
@@ -354,9 +403,73 @@ Nimlet replies on stdin:
 | `type` | `"ui_response"` | |
 | `id` | string | Matches your `ui_request` |
 | `answer` | string | Selected option. Empty when dismissed |
+| `confirmed` | boolean | Confirmation result for `confirm` |
 | `cancelled` | boolean | `true` when there is no TUI to ask, or the user dismissed the prompt |
 
 Time waiting for `ui_response` does not count against `response_timeout_seconds`.
+`password` uses a masked input and is not written to the transcript or session.
+
+### `host_request` and `host_response`
+
+Use a host request inside a tool or command handler when you need an isolated
+model completion, the user's external text editor, or current session details. Host requests do not enter the
+session history, and time spent waiting does not count against
+`response_timeout_seconds`.
+
+Generate text with the active provider and model:
+
+```json
+{
+  "type": "host_request",
+  "id": "generate-1",
+  "method": "model.complete",
+  "system_prompt": "Write a concise handoff prompt.",
+  "prompt": "Conversation and next task...",
+  "max_tokens": 4096
+}
+```
+
+Nimlet replies:
+
+```json
+{
+  "type": "host_response",
+  "id": "generate-1",
+  "result": {
+    "text": "## Context\n...",
+    "model": "claude-sonnet-4-6",
+    "finish_reason": "frEndTurn"
+  }
+}
+```
+
+`prompt` is required. `system_prompt` is optional. `max_tokens` defaults to the
+configured output limit. This call has no tools and does not append either
+message to the current session.
+
+Open text in `$VISUAL`, then `$EDITOR`, falling back to `nano`:
+
+```json
+{
+  "type": "host_request",
+  "id": "editor-1",
+  "method": "ui.editor",
+  "title": "Edit handoff prompt",
+  "text": "## Context\n..."
+}
+```
+
+A successful response contains `result.text`. When an editor is unavailable or
+the operation cannot complete, `result.cancelled` is `true` and `result.error`
+describes why. Other host request failures return a top-level `error`.
+
+The remaining host methods expose small pieces of current-session state:
+
+| Method | Input | Result |
+| --- | --- | --- |
+| `session.info` | none | `id`, `name`, `path`, `workspace`, and `event_count` |
+| `session.name` | optional `name` | Gets the name, or sets and returns it |
+| `context.usage` | none | Estimated `tokens`, context `limit`, and `percent` |
 
 ## Lifecycle events
 
@@ -369,6 +482,7 @@ are accepted at registration but never fire.
 | `tool_result` | After a tool returns, before the result is saved |
 | `turn_start` | At the start of each agent turn |
 | `turn_end` | When a turn finishes or is interrupted |
+| `context` | Before every model request, after compaction and queued-message delivery |
 | `session_start` | When nimlet starts, and after `/new`, `/resume`, or `/fork` |
 | `session_end` | Before switching sessions, and when nimlet exits |
 | `session_before_compact` | Before compaction runs (auto or manual `/compact`) |
@@ -376,7 +490,7 @@ are accepted at registration but never fire.
 
 **When hooks do not run:**
 
-- **Plan mode** - no lifecycle events are dispatched. Switch to act mode first.
+- **Plan mode** - only `context` is dispatched. Other hooks require act mode.
 - **`ask_user`** - the built-in question tool does not trigger `tool_call` or
   `tool_result` hooks.
 
@@ -460,6 +574,25 @@ footer or store session data.
 | `interrupted` | boolean | Present and `true` when the user stopped the turn with Esc or Ctrl+C |
 
 Reply to acknowledge. `allow: false` has no effect.
+
+### `context`
+
+The payload contains the final `system` string array and typed `messages` array
+for the next model request. Add context without replacing existing content:
+
+```json
+{
+  "type": "response",
+  "id": "9",
+  "system": ["Current deployment target: staging"],
+  "messages": [
+    {"type":"user","role":"user","content":[{"type":"text","text":"CI is passing"}]}
+  ]
+}
+```
+
+Added system instructions and messages apply to that model request only. They
+are not appended to the saved session.
 
 ### `session_start`
 
@@ -679,7 +812,8 @@ for line in sys.stdin:
     elif kind == "tool":
         with open("NOTES.md", "a") as handle:
             handle.write(message["arguments"]["text"] + "\n")
-        send({"type": "response", "id": message["id"], "content": "Saved the note.",
+        send({"type": "response", "id": message["id"],
+              "content": [{"type": "text", "text": "Saved the note."}],
               "status": {"key": "notes", "text": "NOTES.md updated"}})
 
     elif kind == "shutdown":

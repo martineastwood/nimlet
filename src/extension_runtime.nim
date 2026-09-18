@@ -19,6 +19,12 @@ type
   ExtensionQuestionProc* = proc(prompt: string,
     options: seq[string]): Future[string] {.closure.}
 
+  ExtensionInputProc* = proc(prompt: string,
+    secret: bool): Future[string] {.closure.}
+
+  ExtensionHostRequestProc* = proc(methodName: string,
+    request: JsonNode): Future[JsonNode] {.closure.}
+
   ExtensionCommand* = object
     name*: string
     description*: string
@@ -45,6 +51,10 @@ type
   ExtensionEntry* = object
     extension*: string
     data*: JsonNode
+
+  ExtensionUserMessage* = object
+    content*: string
+    deliverAs*: string
 
   IncomingMessage = tuple[extension: int, line: string]
 
@@ -76,11 +86,15 @@ type
     widgets*: seq[ExtensionWidget]
     notices: seq[ExtensionNotice]
     entries: seq[ExtensionEntry]
+    userMessages: seq[ExtensionUserMessage]
     question*: ExtensionQuestionProc
+    input*: ExtensionInputProc
+    hostRequest*: ExtensionHostRequestProc
     signal: UpdateSignal
     nextId: int
     inbox: ptr Channel[IncomingMessage]
     responses: Table[string, JsonNode]
+    toolUpdates: Table[string, seq[string]]
     questions: seq[Future[void]]
     questionCompletedAt: float
 
@@ -180,6 +194,13 @@ proc captureActions(runtime: ExtensionRuntime, extension: int,
   let entry = response.getOrDefault("entry")
   if not entry.isNil:
     runtime.entries.add ExtensionEntry(extension: namespace, data: entry)
+  let userMessage = response.getOrDefault("user_message")
+  if not userMessage.isNil and userMessage.kind == JObject:
+    let content = userMessage.stringField("content")
+    let deliverAs = userMessage.stringField("deliver_as")
+    if content.len > 0 and deliverAs in ["now", "steer", "follow_up"]:
+      runtime.userMessages.add ExtensionUserMessage(content: content,
+        deliverAs: deliverAs)
 
 proc readHandleLine(handle: FileHandle): string {.gcsafe.}
 
@@ -379,6 +400,43 @@ proc answerQuestion(runtime: ExtensionRuntime, extension: int,
     "cancelled": answer.len == 0})
   runtime.questionCompletedAt = epochTime()
 
+proc answerConfirm(runtime: ExtensionRuntime, extension: int,
+                   request: JsonNode): Future[void] {.async.} =
+  let answer = if runtime.question.isNil: ""
+    else: await runtime.question(request.stringField("prompt"), @["Yes", "No"])
+  runtime.processes[extension].process.send(%*{"type": "ui_response",
+    "id": request.stringField("id"), "confirmed": answer == "Yes",
+    "cancelled": answer.len == 0})
+  runtime.questionCompletedAt = epochTime()
+
+proc answerInput(runtime: ExtensionRuntime, extension: int,
+                 request: JsonNode): Future[void] {.async.} =
+  let answer = if runtime.input.isNil: ""
+    else: await runtime.input(request.stringField("prompt"),
+      request.stringField("method") == "password")
+  runtime.processes[extension].process.send(%*{"type": "ui_response",
+    "id": request.stringField("id"), "answer": answer,
+    "cancelled": answer.len == 0})
+  runtime.questionCompletedAt = epochTime()
+
+proc answerHostRequest(runtime: ExtensionRuntime, extension: int,
+                       request: JsonNode): Future[void] {.async.} =
+  var response = %*{"type": "host_response",
+    "id": request.stringField("id")}
+  try:
+    if runtime.hostRequest.isNil:
+      response["cancelled"] = %true
+      response["error"] = %"host request is unavailable"
+    else:
+      response["result"] = await runtime.hostRequest(
+        request.stringField("method"), request)
+  except CancelledError:
+    response["cancelled"] = %true
+  except CatchableError as e:
+    response["error"] = %e.msg
+  runtime.processes[extension].process.send(response)
+  runtime.questionCompletedAt = epochTime()
+
 proc setOnUpdate*(runtime: ExtensionRuntime,
                   callback: UpdateSignalProc, context: pointer = nil) =
   if runtime.isNil: return
@@ -395,10 +453,24 @@ proc pump*(runtime: ExtensionRuntime) =
     let kind = message.stringField("type")
     if kind == "response":
       runtime.responses[message.stringField("id")] = message
-    elif kind == "ui_request" and
-        message.stringField("method") == "question":
-      runtime.questions.add runtime.answerQuestion(incoming.msg.extension,
+    elif kind == "ui_request":
+      case message.stringField("method")
+      of "question":
+        runtime.questions.add runtime.answerQuestion(incoming.msg.extension,
+          message)
+      of "confirm":
+        runtime.questions.add runtime.answerConfirm(incoming.msg.extension,
+          message)
+      of "input", "password":
+        runtime.questions.add runtime.answerInput(incoming.msg.extension,
+          message)
+      else: discard
+    elif kind == "host_request":
+      runtime.questions.add runtime.answerHostRequest(incoming.msg.extension,
         message)
+    elif kind == "tool_update":
+      runtime.toolUpdates.mgetOrPut(message.stringField("id"), @[]).add(
+        message.stringField("content"))
     else:
       runtime.captureActions(incoming.msg.extension, message)
   for i in countdown(runtime.questions.high, 0):
@@ -413,6 +485,9 @@ proc requestAsync(runtime: ExtensionRuntime, extension: int,
   let started = epochTime()
   while true:
     runtime.pump()
+    if id in runtime.toolUpdates:
+      for update in runtime.toolUpdates[id]: streamOutput(update)
+      runtime.toolUpdates.del(id)
     if id in runtime.responses:
       result = runtime.responses[id]
       runtime.responses.del(id)
@@ -427,15 +502,16 @@ proc requestAsync(runtime: ExtensionRuntime, extension: int,
       raise newException(IOError, "extension response timed out")
     await sleepAsync(50)
 
-proc invoke*(runtime: ExtensionRuntime, name,
-             arguments: string): Future[JsonNode] {.async.} =
+proc invoke*(runtime: ExtensionRuntime, name, arguments: string,
+             context: JsonNode = nil): Future[JsonNode] {.async.} =
   for command in runtime.commands:
     if command.name.toLowerAscii != name.toLowerAscii: continue
     inc runtime.nextId
     let id = $runtime.nextId
-    result = await runtime.requestAsync(command.extension,
-      %*{"type": "command", "id": id, "name": command.name,
-        "arguments": arguments})
+    let request = %*{"type": "command", "id": id, "name": command.name,
+      "arguments": arguments}
+    if not context.isNil: request["context"] = context
+    result = await runtime.requestAsync(command.extension, request)
     return
   raise newException(ValueError, "unknown extension command: " & name)
 
@@ -454,7 +530,22 @@ proc registerTools*(runtime: ExtensionRuntime, registry: var ToolRegistry,
       let response = await runtime.requestAsync(registered.extension,
         %*{"type": "tool", "id": id, "name": registered.definition.name,
           "arguments": input})
-      return ToolResult(output: response.getOrDefault("content").getStr,
+      let content = response.getOrDefault("content")
+      if content.kind != JArray:
+        return toolFailure("invalid_extension_result",
+          "extension tool content must be an array")
+      var output: seq[string]
+      var images: seq[ImageContent]
+      for part in content:
+        case part.stringField("type")
+        of "text": output.add part.stringField("text")
+        of "image":
+          images.add ImageContent(mimeType: part.stringField("mimeType"),
+            data: part.stringField("data"), path: part.stringField("path"))
+        else:
+          return toolFailure("invalid_extension_result",
+            "extension tool content supports text and image parts")
+      return ToolResult(output: output.join("\n"), images: images,
         isError: response.getOrDefault("is_error").getBool)
     registry.register(registered.definition, run, registered.capabilities)
     if not plan.isNil and registered.capabilities.planSafe:
@@ -469,6 +560,11 @@ proc takeEntries*(runtime: ExtensionRuntime): seq[ExtensionEntry] =
   if runtime.isNil: return
   result = runtime.entries
   runtime.entries.setLen(0)
+
+proc takeUserMessages*(runtime: ExtensionRuntime): seq[ExtensionUserMessage] =
+  if runtime.isNil: return
+  result = runtime.userMessages
+  runtime.userMessages.setLen(0)
 
 proc statusTexts*(runtime: ExtensionRuntime): seq[string] =
   if runtime.isNil: return
@@ -501,6 +597,14 @@ proc dispatch*(runtime: ExtensionRuntime, event: HookEvent,
       result.reason.add(if result.reason.len == 0: reason else: "; " & reason)
       continue
     case event
+    of heContext:
+      for value in response.stringArray("system"):
+        result.system.add value
+      let messages = response.getOrDefault("messages")
+      if not messages.isNil and messages.kind == JArray:
+        if result.messages.isNil: result.messages = newJArray()
+        for message in messages:
+          result.messages.add message
     of hePreToolCall:
       let arguments = response.getOrDefault("arguments")
       if not arguments.isNil and arguments.kind == JObject:

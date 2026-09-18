@@ -70,8 +70,22 @@ emit additional user records for those messages.
 | `approval_required` | The tool-call fields plus `can_remember` |
 | `tool_output_delta` | `step`, `tool_id`, `tool_name`, `delta` |
 | `tool_result` | `step`, `tool_id`, `tool_name`, `output`, `is_error` |
+| `step_start` | `step`, optional `model` |
+| `step_end` | `step`, optional `model`, optional `usage`, optional `duration_ms` |
 | `run_end` | optional `model` |
 | `error` | `step`, `message` |
+
+Every completed model request emits one `step_end` record. When the provider
+reports token usage, `step_end` carries a `usage` object:
+
+```json
+{"version":1,"type":"step_end","step":0,"model":"...","usage":{"input_tokens":12,"output_tokens":5,"cache_read_tokens":4,"cache_write_tokens":0,"cache_reported":true}}
+```
+
+Sum `usage` across the `step_end` records of a run to get the run's total
+token consumption. `cache_reported` is `false` when the provider does not
+report cache statistics, so zero cache fields mean "not reported" rather than
+"nothing was cached".
 
 Run records also include `run_id` when available. Run and step records include
 `session_id` and `turn_id` when available. `duration_ms` is omitted when it is

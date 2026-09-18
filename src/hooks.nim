@@ -12,6 +12,7 @@ type
     hePostCompact = "session_compact"
     heTurnStart = "turn_start"
     heTurnEnd = "turn_end"
+    heContext = "context"
 
   HookOutcome* = object
     allowed*: bool
@@ -27,6 +28,8 @@ type
     summary*: string
     firstKeptIndex*: int
     details*: JsonNode
+    system*: seq[string]
+    messages*: JsonNode
 
 proc sessionPayload*(sessionId, workspace: string): JsonNode =
   %*{"session_id": sessionId, "workspace": workspace}

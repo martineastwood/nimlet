@@ -418,19 +418,71 @@ proc applyExtensionActions*(agent: ptr Agent, ui: TurnSink) =
       else: mlPlain
     if not ui.emit.isNil: ui.emit(level, notice.message)
     else: stderr.writeLine notice.message
+  for message in agent.extensionRuntime.takeUserMessages:
+    if not ui.enqueueMessage.isNil:
+      ui.enqueueMessage(message.content, message.deliverAs)
   if not ui.onChange.isNil: ui.onChange()
 
 proc bindExtensionUi(agent: ptr Agent, ui: TurnSink) =
   if agent.extensionRuntime.isNil: return
   if ui.question.isNil:
     agent.extensionRuntime.question = nil
-    return
-  agent.extensionRuntime.question = proc(prompt: string,
-      options: seq[string]): Future[string] {.async.} =
-    var choices: seq[QuestionOption]
-    for option in options: choices.add QuestionOption(label: option)
-    let answer = await ui.question(prompt, choices)
-    if not answer.cancelled: result = answer.text
+  else:
+    agent.extensionRuntime.question = proc(prompt: string,
+        options: seq[string]): Future[string] {.async.} =
+      var choices: seq[QuestionOption]
+      for option in options: choices.add QuestionOption(label: option)
+      let answer = await ui.question(prompt, choices)
+      if not answer.cancelled: result = answer.text
+  if ui.promptText.isNil:
+    agent.extensionRuntime.input = nil
+  else:
+    agent.extensionRuntime.input = proc(prompt: string,
+        secret: bool): Future[string] {.async.} =
+      let answer = await ui.promptText(prompt, secret)
+      if not answer.cancelled: result = answer.text
+  agent.extensionRuntime.hostRequest = proc(methodName: string,
+      request: JsonNode): Future[JsonNode] {.async.} =
+    case methodName
+    of "model.complete":
+      let prompt = request.getOrDefault("prompt").getStr
+      if prompt.len == 0: raise newException(ValueError, "prompt is required")
+      let maxTokens = request.getOrDefault("max_tokens").getInt(
+        agent[].config.maxTokens)
+      let response = await generateTextAsync(agent[].provider, ProviderRequest(
+        model: agent[].config.model,
+        conversationId: agent[].session.id & ":extension",
+        system: @[request.getOrDefault("system_prompt").getStr],
+        messages: @[userMessage(prompt)], maxTokens: maxTokens,
+        options: providerOptions(agent[].config)),
+        abort = proc(): bool = cancelRequested())
+      return %*{"text": response.text, "model": response.model,
+        "finish_reason": $response.finishReason}
+    of "ui.editor":
+      if ui.editText.isNil:
+        return %*{"cancelled": true,
+          "error": "interactive editor is unavailable"}
+      let edited = await ui.editText(request.getOrDefault("title").getStr,
+        request.getOrDefault("text").getStr)
+      if not edited.ok:
+        return %*{"cancelled": true, "error": edited.error}
+      return %*{"text": edited.text}
+    of "session.info":
+      return %*{"id": agent[].session.id, "name": agent[].session.name,
+        "path": agent[].session.path, "workspace": agent[].session.workspace,
+        "event_count": agent[].session.events.len}
+    of "session.name":
+      if "name" in request:
+        agent[].session.setName(request.getOrDefault("name").getStr)
+        if not ui.onChange.isNil: ui.onChange()
+      return %*{"name": agent[].session.name}
+    of "context.usage":
+      let used = estimatedContextTokens(agent[].session)
+      let limit = agent[].config.effectiveContextWindow
+      return %*{"tokens": used, "limit": limit,
+        "percent": if limit > 0: min(100, used * 100 div limit) else: 0}
+    else:
+      raise newException(ValueError, "unknown host request: " & methodName)
 
 proc emitAgentEvent(ui: TurnSink, event: NimletEvent) =
   if not ui.agentEvent.isNil: ui.agentEvent(event)
@@ -649,7 +701,8 @@ proc compactionPoll(ui: TurnSink): StreamCallback =
 
 proc runLifecycle(agent: ptr Agent, event: HookEvent, payload: JsonNode,
                   ui: TurnSink): Future[HookOutcome] {.async.} =
-  if agent.mode == modePlan: return HookOutcome(allowed: true)
+  if agent.mode == modePlan and event != heContext:
+    return HookOutcome(allowed: true)
   result = await agent.extensionRuntime.dispatch(event, payload)
   agent.applyExtensionActions(ui)
   reportLines(ui, mlWarn, result.warnings)
@@ -1210,7 +1263,10 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
   agent.bindExtensionUi(ui)
   let codexProvider = agent.bindCodexApproval(ui)
   defer:
-    if not agent.extensionRuntime.isNil: agent.extensionRuntime.question = nil
+    if not agent.extensionRuntime.isNil:
+      agent.extensionRuntime.question = nil
+      agent.extensionRuntime.input = nil
+      agent.extensionRuntime.hostRequest = nil
     if not codexProvider.isNil: codexProvider.approval = nil
   let runId = (if agent.session.id.len > 0: agent.session.id else: "session") &
     ":turn:" & $agent.session.events.len
@@ -1244,6 +1300,14 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
     if emptyResponseFollowupPending:
       request.messages.add userMessage(emptyResponseFollowup)
       emptyResponseFollowupPending = false
+    let context = await agent.runLifecycle(heContext,
+      %*{"system": request.system, "messages": messagesJson(request.messages)}, ui)
+    request.system.add context.system
+    if not context.messages.isNil:
+      for message in context.messages:
+        try: request.messages.add parseMessageJson(message)
+        except CatchableError as e:
+          ui.emit(mlWarn, "extension context message ignored: " & e.msg)
     var response: ProviderResponse
     try:
       inc step
@@ -1294,7 +1358,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
     if final:
       ui.emitAgentEvent(NimletEvent(kind: neStepFinished, runId: runId,
         sessionId: agent.session.id, turnId: runId, step: step,
-        model: response.model))
+        model: response.model, usage: response.usage))
       if response.text.strip.len == 0:
         if emptyResponses < maxEmptyResponses:
           inc emptyResponses
@@ -1324,7 +1388,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
       if truncatedResponses >= maxTruncatedResponses:
         ui.emitAgentEvent(NimletEvent(kind: neStepFinished, runId: runId,
           sessionId: agent.session.id, turnId: runId, step: step,
-          model: response.model))
+          model: response.model, usage: response.usage))
         ui.emitAgentEvent(NimletEvent(kind: neError, runId: runId,
           sessionId: agent.session.id, turnId: runId, step: step,
           error: "Stopped after repeated output-token limits."))
@@ -1337,7 +1401,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
         return
       ui.emitAgentEvent(NimletEvent(kind: neStepFinished, runId: runId,
         sessionId: agent.session.id, turnId: runId, step: step,
-        model: response.model))
+        model: response.model, usage: response.usage))
       continue
     truncatedResponses = 0
     # A tool call is progress, so a later empty final response gets its own
@@ -1348,8 +1412,17 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
     var parallelReadOnly: seq[Future[ToolResult]]
     var runReadOnlyInParallel = calls.len > 1
     for call in calls:
-      if call.parseError.len > 0 or
-         call.name notin ["read", "grep", "glob", "read_skill"]:
+      if call.parseError.len > 0:
+        runReadOnlyInParallel = false
+        break
+      # Plan mode treats the plan registry as the capability boundary, so no
+      # permission prompt applies there.
+      if agent.mode == modePlan:
+        if not agent.planTools.readOnly(call.name):
+          runReadOnlyInParallel = false
+          break
+      elif not agent.tools.readOnly(call.name) or
+          (not agent.yolo and agent.permissions.check(call) != pcAllow):
         runReadOnlyInParallel = false
         break
     if runReadOnlyInParallel:
@@ -1449,7 +1522,7 @@ proc runTurnAsync*(agent: ptr Agent, ui: TurnSink): Future[void] {.async.} =
 
     ui.emitAgentEvent(NimletEvent(kind: neStepFinished, runId: runId,
       sessionId: agent.session.id, turnId: runId, step: step,
-      model: response.model))
+      model: response.model, usage: response.usage))
     pendingSteering = takeSteering(ui)
     if pendingSteering.len > 0:
       continue
@@ -1466,11 +1539,58 @@ proc processInputAsync*(agent: ptr Agent, input: string,
   of slExtension:
     try:
       agent.bindExtensionUi(ui)
-      defer: agent.extensionRuntime.question = nil
-      let response = await agent[].extensionRuntime.invoke(cmd.extensionName, cmd.arg)
+      defer:
+        agent.extensionRuntime.question = nil
+        agent.extensionRuntime.input = nil
+        agent.extensionRuntime.hostRequest = nil
+      let context = %*{"mode": (if ui.editText.isNil: "non_interactive" else: "tui"),
+        "workspace": agent.config.workspace,
+        "session_id": agent.session.id, "provider": agent.config.provider,
+        "model": agent.config.model,
+        "messages": agent.session.messagesForModelJson}
+      let response = await agent[].extensionRuntime.invoke(cmd.extensionName,
+        cmd.arg, context)
       agent.applyExtensionActions(ui)
       let message = response.getOrDefault("message").getStr
       if message.len > 0: ui.emit(mlPlain, message)
+      let sessionAction = response.getOrDefault("session")
+      if not sessionAction.isNil and sessionAction.kind == JObject:
+        let action = sessionAction.getOrDefault("action").getStr
+        var switched = false
+        case action
+        of "new":
+          await agent.switchSession(loadSession(agent.config.sessionDir,
+            workspace = agent.config.workspace), ui)
+          switched = true
+        of "fork":
+          let ordinal = sessionAction.getOrDefault("message").getInt
+          let choices = agent.session.forkChoices
+          if ordinal < 1 or ordinal > choices.len:
+            raise newException(ValueError, "fork message not found")
+          await agent.switchSession(forkSession(agent.session,
+            choices[ordinal - 1].eventIndex, agent.config.sessionDir), ui)
+          switched = true
+        of "switch":
+          let loaded = tryLoadSession(agent.config.sessionDir,
+            sessionAction.getOrDefault("id").getStr)
+          if not loaded.ok: raise newException(ValueError, loaded.err)
+          await agent.switchSession(loaded.session, ui)
+          switched = true
+        of "compact":
+          discard await agent.runCompaction(
+            sessionAction.getOrDefault("instruction").getStr,
+            compactionPoll(ui), ui)
+        else: raise newException(ValueError, "unknown session action: " & action)
+        if switched and not ui.showSession.isNil: ui.showSession(agent.session)
+        let editorText = sessionAction.getOrDefault("editor_text").getStr
+        if switched and editorText.len > 0 and not ui.setEditorText.isNil:
+          ui.setEditorText(editorText)
+        if not ui.onChange.isNil: ui.onChange()
+        return true
+      if response.getOrDefault("reload").getBool:
+        agent[].rescanPlugins(ui)
+        if not ui.onChange.isNil: ui.onChange()
+        return true
       let prompt = response.getOrDefault("prompt").getStr
       if prompt.len > 0:
         agent.session.addUserMessage(expandUserContent(agent.config.workspace, prompt))

@@ -164,9 +164,11 @@ send({
     <div>
       <p class="landing-kicker">Start in a few lines</p>
       <h2 id="landing-start-title">Bring your provider. Keep your project.</h2>
-      <p>Put the <code>nimlet</code> binary on your <code>PATH</code>, set a provider key, and launch it from the workspace you want to work on.</p>
+      <p>On macOS, install with Homebrew, set a provider key, and launch nimlet from the workspace you want to work on.</p>
     </div>
-    <pre><code><span class="landing-prompt">$</span> export OPENROUTER_API_KEY=your-key
+    <pre><code><span class="landing-prompt">$</span> brew tap martineastwood/nimlet https://github.com/martineastwood/nimlet
+<span class="landing-prompt">$</span> brew install nimlet
+<span class="landing-prompt">$</span> export OPENROUTER_API_KEY=your-key
 <span class="landing-prompt">$</span> cd /path/to/your/project
 <span class="landing-prompt">$</span> nimlet</code></pre>
   </section>

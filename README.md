@@ -25,8 +25,19 @@ UI. There is no language runtime to install and no hosted service in the path.
 
 ## Quickstart
 
-Put the `nimlet` binary on your `PATH`, set a provider key, and run it from the
-workspace you want to work on:
+### Install on macOS
+
+```sh
+brew tap martineastwood/nimlet https://github.com/martineastwood/nimlet
+brew install nimlet
+```
+
+The formula builds from source and depends on Homebrew OpenSSL and PCRE. Ripgrep
+is installed by default so workspace search stays fast.
+
+### Run
+
+Set a provider key and run nimlet from the workspace you want to work on:
 
 ```sh
 export OPENROUTER_API_KEY=your-key
@@ -44,7 +55,7 @@ Nimlet reads and searches files, checks Git history, makes the smallest edit tha
 fits, and runs the commands you approve. The footer shows the active provider,
 model, thinking level, context usage, tokens, and cost when pricing is known.
 
-To build the binary from source, install Nim 2.0 or later and run
+To build from a source checkout instead, install Nim 2.0 or later and run
 `nimble release`, which writes `build/nimlet`.
 
 ### Providers

@@ -140,6 +140,13 @@ proc newRpcRuntime*(agent: ptr Agent, writeEvent: RpcWriter = nil): RpcRuntime =
       result.add item.prompt
       runtime.send queueEventJson(runtime.agent[].session.id, "dequeue", "",
         runtime.queuedCount, item.requestId, "follow_up")
+  ui.enqueueMessage = proc(content, deliverAs: string) =
+    let item = RpcQueuedPrompt(requestId: "extension", prompt: content)
+    if deliverAs == "steer": runtime.steeringQueue.add item
+    else: runtime.followUpQueue.add item
+    runtime.send queueEventJson(runtime.agent[].session.id, "enqueue", content,
+      runtime.queuedCount, item.requestId,
+      if deliverAs == "steer": "steer" else: "follow_up")
   ui.showSession = proc (session: Session) =
     runtime.send sessionEventJson("session_start", session.id)
   proc generateImpl(provider: Provider, request: ProviderRequest,

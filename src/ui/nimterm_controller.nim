@@ -11,6 +11,7 @@ import ../extension_runtime
 import ../events
 import ../session
 import ../permissions
+import ../editor
 import nimterm_adapter
 import nimterm_screen
 import ../shell
@@ -133,6 +134,8 @@ proc cancelInteraction(controller: NimletController) =
       not controller.approvalFuture.finished:
     controller.approvalFuture.complete(pdDeny)
 
+proc startSubmission*(controller: NimletController, text: string)
+
 proc previewSink(controller: NimletController): TurnSink =
   let screen = controller.screen
   let app = controller.app
@@ -240,7 +243,7 @@ proc previewSink(controller: NimletController): TurnSink =
       screen.questionWidget = newQuestion(prompt, options,
         style = screen.menu.style, selectedStyle = screen.menu.selectedStyle,
         descriptionStyle = screen.menu.descriptionStyle,
-        hintStyle = screen.menu.descriptionStyle)
+        hintStyle = screen.menu.descriptionStyle, allowFreeText = false)
       screen.questionWidget.id = "question"
       controller.questionFuture = newFuture[QuestionAnswer]("nimletQuestion")
       app[].invalidate()
@@ -249,6 +252,36 @@ proc previewSink(controller: NimletController): TurnSink =
       screen.questionWidget = nil
       app[].invalidate()
       app[].flush(true),
+    promptText: proc (prompt: string,
+                      secret: bool): Future[QuestionAnswer] {.async.} =
+      screen.questionWidget = newQuestion(prompt, @[],
+        style = screen.menu.style, selectedStyle = screen.menu.selectedStyle,
+        descriptionStyle = screen.menu.descriptionStyle,
+        hintStyle = screen.menu.descriptionStyle, allowFreeText = true,
+        freeTextLabel = if secret: "Secret" else: "Answer", secret = secret)
+      screen.questionWidget.id = "question"
+      controller.questionFuture = newFuture[QuestionAnswer]("nimletInput")
+      app[].invalidate()
+      app[].flush(true)
+      result = await controller.questionFuture
+      screen.questionWidget = nil
+      app[].invalidate()
+      app[].flush(true),
+    editText: proc (title, text: string): Future[ExternalEditResult] {.async.} =
+      discard title
+      result = editTextExternally(text)
+      if not app[].backend.isNil: app[].backend.resetPresentation()
+      controller.refreshFooter()
+      app[].invalidate()
+      app[].flush(true),
+    enqueueMessage: proc (content, deliverAs: string) =
+      case deliverAs
+      of "steer": controller.steeringQueue.add content
+      of "follow_up": controller.followUpQueue.add content
+      else:
+        if screen.busy: controller.followUpQueue.add content
+        else: controller.startSubmission(content)
+      controller.refreshFooter(),
     toolStart: proc (call: ContentBlock) =
       screen.activity = "Running " & call.name & "…"
       refresh(),

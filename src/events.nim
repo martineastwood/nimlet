@@ -1,5 +1,6 @@
 ## Lifecycle events emitted by nimlet's coding-agent loop.
 
+import nimgent
 import std/json
 
 type
@@ -33,6 +34,7 @@ type
     durationMs*: int
     error*: string
     canRemember*: bool
+    usage*: Usage
 
 const jsonEventVersion* = 1
 
@@ -64,6 +66,15 @@ proc nimletEventJson*(event: NimletEvent): JsonNode =
   of neStepStarted, neStepFinished:
     result["step"] = %event.step
     if event.model.len > 0: result["model"] = %event.model
+    if event.kind == neStepFinished:
+      let usage = event.usage
+      if usage.inputTokens > 0 or usage.outputTokens > 0 or usage.cacheReported:
+        result["usage"] = %*{
+          "input_tokens": usage.inputTokens,
+          "output_tokens": usage.outputTokens,
+          "cache_read_tokens": usage.cacheReadTokens,
+          "cache_write_tokens": usage.cacheWriteTokens,
+          "cache_reported": usage.cacheReported}
   of neTextDelta, neThinkingDelta:
     result["step"] = %event.step
     result["delta"] = %event.text

@@ -72,6 +72,11 @@ proc planSafe*(capabilities: ToolCapabilities): bool =
       return false
   true
 
+proc readOnly*(reg: ToolRegistry, name: string): bool =
+  ## True when the registered tool declares only the read capability, so it can
+  ## run alongside other read-only tools without ordering or approval concerns.
+  name in reg.tools and reg.tools[name].capabilities == {tcRead}
+
 proc register*(reg: var ToolRegistry, def: ToolDefinition, fn: ToolProc,
                capabilities: ToolCapabilities) =
   if reg.tools.len == 0:
