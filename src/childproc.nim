@@ -1,8 +1,7 @@
 ## Shared wait/kill for spawned children (bash tool and extensions).
 
-import std/[asyncdispatch, osproc, times]
+import std/[asyncdispatch, os, osproc, streams, times]
 when not defined(windows):
-  import os
   import posix
   when defined(macosx) or defined(freebsd) or defined(netbsd) or
        defined(openbsd) or defined(dragonfly):
@@ -77,7 +76,7 @@ when not defined(windows):
               discard
         return true
 
-  proc stopChild(p: Process) =
+  proc stopChild*(p: Process) =
     requestStop(p, hard = false)
     let giveUp = epochTime() + TermGiveUpMs / 1000
     while p.peekExitCode == -1:
@@ -89,12 +88,28 @@ when not defined(windows):
       requestStop(p, hard = true)
       discard p.waitForExit(1000)
 else:
-  proc stopChild(p: Process) =
-    ## TerminateProcess is Nim's portable Windows process-stop primitive. A
-    ## Windows process tree requires a Job Object; the direct child is still
-    ## always stopped, which is the safe behavior for tool cancellation.
-    p.kill()
+  proc stopProcessTree(p: Process) =
+    ## TerminateProcess only stops the shell itself.  Tool commands commonly
+    ## start a second process (PowerShell jobs, cmd scripts, or a native
+    ## executable), so use the Windows-provided tree terminator first.  The
+    ## PID is numeric and passed as an argv item; no shell quoting is involved.
+    let taskkill = findExe("taskkill.exe")
+    if taskkill.len > 0:
+      try:
+        let killer = startProcess(taskkill,
+          args = @["/PID", $p.processID, "/T", "/F"],
+          options = {poUsePath, poStdErrToStdOut})
+        discard killer.outputStream.readAll
+        discard killer.waitForExit(1000)
+        killer.close()
+      except CatchableError:
+        discard
+    if p.peekExitCode() == -1:
+      p.kill()
     discard p.waitForExit(1000)
+
+  proc stopChild*(p: Process) =
+    stopProcessTree(p)
 
 type
   WaitEnd* = enum

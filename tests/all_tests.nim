@@ -3943,9 +3943,12 @@ suite "external tools":
     defer: removeDir(root)
     let dir = root / ".nimlet" / "tools" / "echo_json"
     createDir(dir)
+    when defined(windows):
+      let pwsh = findExe("pwsh")
+      if pwsh.len == 0:
+        skip()
     let command = when defined(windows):
-      @[if findExe("pwsh").len > 0: findExe("pwsh")
-        else: findExe("powershell"), "-NoLogo", "-NoProfile", "-Command",
+      @[findExe("pwsh"), "-NoLogo", "-NoProfile", "-Command",
         "[Console]::WriteLine('{\"bin\":true}')"]
     else:
       @["/bin/echo", "{\"bin\":true}"]
@@ -4034,6 +4037,31 @@ done
     ui.emit = proc (level: MsgLevel, text: string) = messages.add text
     check agent.processInput("/hello world", ui)
     check messages == @["Hello from extension"]
+
+  test "accepts a JSONL response larger than the Windows pipe probe":
+    let root = freshDir()
+    defer: removeDir(root)
+    createDir(root / ".nimlet" / "extensions" / "large")
+    let dir = root / ".nimlet" / "extensions" / "large"
+    writeFile(dir / "extension.json", $(%*{
+      "name": "large", "command": ["./extension.sh"]}))
+    writeFile(dir / "extension.sh", """#!/bin/sh
+read init
+echo '{"type":"register","commands":[{"name":"large","description":"Large response"}]}'
+read request
+printf '{"type":"response","id":"1","message":"'
+i=0
+while [ $i -lt 5000 ]; do printf x; i=$((i + 1)); done
+printf '"}\n'
+read shutdown
+""")
+    setFilePermissions(dir / "extension.sh", {fpUserRead, fpUserWrite,
+      fpUserExec})
+    let runtime = startExtensions(root, "session")
+    defer: runtime.stop()
+    let response = runtime.invoke("large", "input")
+    discard waitFor response
+    check response.read["message"].getStr.len == 5000
 
   test "registers tools and accepts unlimited response time":
     let root = freshDir()

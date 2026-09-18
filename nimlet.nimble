@@ -15,7 +15,11 @@ task test, "Run the test suite":
   exec "nim c -r --hints:off --threads:on --mm:orc tests/trace_metrics_tests.nim"
 
 task release, "Build release binary":
-  exec "mkdir -p build && nim c -d:release --threads:on --mm:orc -o:build/nimlet src/nimlet.nim"
+  when defined(windows):
+    exec "cmd.exe /c if not exist build mkdir build"
+  else:
+    exec "mkdir -p build"
+  exec "nim c -d:release --threads:on --mm:orc -o:build/nimlet src/nimlet.nim"
 
 task idleSmoke, "Idle CPU/wakeup smoke (IDLE_SECS=60 by default)":
   exec "scripts/idle_smoke.sh"

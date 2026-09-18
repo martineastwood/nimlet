@@ -8,10 +8,12 @@ else:
   import posix
 import config
 import extensions
+import childproc
 import trust
 import nimgent
 import tools/tool
 import hooks
+import shell
 
 type
   ExtensionQuestionProc* = proc(prompt: string,
@@ -187,19 +189,19 @@ proc receive(process: Process, timeoutMs = 30_000): JsonNode =
     ## record without turning a child response timeout into a blocked read.
     let deadline = epochTime() + timeoutMs.float / 1000.0
     let handle = Handle(process.outputHandle)
+    var line = ""
     while true:
       var available: int32
-      var readCount: int32
-      var probe: array[4096, char]
-      if peekNamedPipe(handle, addr probe[0], probe.len.int32,
-                       addr readCount, addr available, nil) and readCount > 0:
-        var hasNewline = false
-        for i in 0 ..< int(readCount):
-          if probe[i] == '\n':
-            hasNewline = true
-            break
-        if hasNewline:
-          return parseJson(readHandleLine(process.outputHandle))
+      if peekNamedPipe(handle, nil, 0, nil, addr available, nil) and
+          available > 0:
+        var ch: char
+        var count: int32
+        if winlean.readFile(handle, addr ch, 1, addr count, nil) == 0 or
+            count == 0:
+          raise newException(IOError, "extension closed stdout")
+        if ch == '\n':
+          return parseJson(line)
+        if ch != '\r': line.add ch
       if timeoutMs >= 0 and epochTime() >= deadline:
         raise newException(IOError, "extension response timed out")
       if process.peekExitCode() != -1:
@@ -213,7 +215,10 @@ proc receive(process: Process, timeoutMs = 30_000): JsonNode =
 
 proc extensionLaunch(command: seq[string], dir: string):
     tuple[executable: string, args: seq[string]] =
-  result.executable = if command[0].isAbsolute or '/' notin command[0]:
+  ## A bare name is resolved through PATH. Relative paths are resolved next
+  ## to the manifest; accept both separators for Windows-authored manifests.
+  let hasPath = '/' in command[0] or '\\' in command[0]
+  result.executable = if command[0].isAbsolute or not hasPath:
     command[0]
   else:
     dir / command[0]
@@ -335,7 +340,7 @@ proc startExtensions*(workspace, sessionId: string): ExtensionRuntime =
           signal: addr result.signal))
     except CatchableError as e:
       if not process.isNil:
-        if process.running: process.terminate()
+        if process.running: stopChild(process)
         process.close()
       result.warnings.add "extension '" & spec.name & "' failed to start: " & e.msg
 
@@ -345,8 +350,7 @@ proc stop*(runtime: ExtensionRuntime) =
     try: extension.process.send(%*{"type": "shutdown"})
     except CatchableError: discard
     if extension.process.running:
-      extension.process.terminate()
-      discard extension.process.waitForExit(100)
+      stopChild(extension.process)
     joinThread(extension.reader)
     extension.process.close()
   runtime.processes.setLen(0)

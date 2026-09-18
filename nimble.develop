@@ -4,6 +4,6 @@
   "dependencies": [
     "../nimterm",
     "../nimgent",
-    "../nimwire"
+    "../../nimwire"
   ]
 }

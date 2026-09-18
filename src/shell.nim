@@ -43,8 +43,11 @@ proc defaultShell*(): ShellSpec =
       if name in ["bash", "sh", "zsh", "fish"]:
         return ShellSpec(kind: if name == "bash": shellBash else: shellPosix,
           executable: configuredPath)
-      if name in ["pwsh", "powershell"]:
+      if name == "pwsh":
         return ShellSpec(kind: shellPowerShell, executable: configuredPath)
+      if name == "powershell":
+        raise newException(ValueError,
+          "Windows PowerShell 5.1 is not supported; install PowerShell 7+ and use pwsh")
       if name == "cmd":
         return ShellSpec(kind: shellCmd, executable: configuredPath)
       ## An explicit NIMLET_SHELL may be a custom POSIX-compatible shell.
@@ -57,14 +60,13 @@ proc defaultShell*(): ShellSpec =
       if bash.len > 0:
         return ShellSpec(kind: shellBash, executable: bash)
     ## PSModulePath is present in PowerShell sessions; use pwsh there so `!`
-    ## shortcuts and model shell tools behave like the user's current shell.
+    ## shortcuts and model shell tools use UTF-8 native stream redirection.
+    ## Windows PowerShell 5.1 is deliberately not a fallback: its redirected
+    ## native output is UTF-16 and corrupts tool results.
     if getEnv("PSModulePath").len > 0:
       let pwsh = resolveShell("pwsh")
       if pwsh.len > 0:
         return ShellSpec(kind: shellPowerShell, executable: pwsh)
-      let powershell = resolveShell("powershell")
-      if powershell.len > 0:
-        return ShellSpec(kind: shellPowerShell, executable: powershell)
     let cmd = getEnv("ComSpec", "cmd.exe")
     return ShellSpec(kind: shellCmd, executable: cmd)
   else:
@@ -78,7 +80,12 @@ proc shellQuote(spec: ShellSpec, value: string): string =
   of shellCmd:
     quoteShellWindows(value)
   of shellPosix:
-    quoteShellPosix(value)
+    when defined(windows):
+      ## MSYS shells use POSIX parsing even when Nim received a Win32 path.
+      ## Backslashes would otherwise be consumed as escapes by the shell.
+      quoteShellPosix(value.replace("\\", "/"))
+    else:
+      quoteShellPosix(value)
   of shellBash:
     ## MSYS Bash accepts POSIX-style drive paths, while Nim's Windows
     ## process quoting otherwise leaves backslashes for Bash to consume as
@@ -126,9 +133,9 @@ proc redirectedCommand*(spec: ShellSpec, command, stdoutPath,
       ""
     "set +m; (" & command & ")" & stdinRedirect & stdoutRedirect & stderrRedirect
   of shellPowerShell:
+    ## Requires PowerShell 7+, whose native stream/redirection defaults are
+    ## UTF-8. Windows PowerShell 5.1 writes redirected text as UTF-16.
     let body = if stdinPath.len > 0:
-      ## PowerShell has no input-redirection operator. Feed the file through
-      ## a nested script block so native executables receive stdin bytes.
       "Get-Content -Raw -LiteralPath " & shellQuote(spec, stdinPath) &
         " | & { $input | " & command & " }"
     else:
