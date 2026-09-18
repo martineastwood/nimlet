@@ -313,6 +313,7 @@ proc runConsole(agent: var Agent, catalogNote = "", initialPrompt = "") =
       stderr.writeLine "ERROR: " & e.msg
 
 proc runMain*() =
+  clearNonBlockingStdio()
   let cli = parseCliArgs(commandLineParams())
   if cli.help:
     discard applyTheme("dark", detectDepth(), getCurrentDir(), ".nimlet",
