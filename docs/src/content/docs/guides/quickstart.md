@@ -10,19 +10,21 @@ required to use nimlet.
 
 ## Install on macOS
 
-On macOS, install with Homebrew. The formula builds nimlet from source and pulls
-in OpenSSL, PCRE, and (by default) ripgrep:
+Download the latest release tarball (binary plus bundled OpenSSL and PCRE):
 
 ```sh
-brew tap martineastwood/nimlet https://github.com/martineastwood/nimlet
-brew install nimlet
+curl -fsSL https://nimlet.niminal.dev/install.sh | sh
 ```
 
-Homebrew installs the `nimlet` binary on your `PATH`. Ripgrep is recommended so
-workspace search stays fast; nimlet still falls back to its built-in search if
-`rg` is not available.
+The installer puts nimlet under `~/.local/lib/nimlet` and links `~/.local/bin/nimlet`.
+Add `~/.local/bin` to your `PATH` if it is not already there.
 
-To build from a source checkout instead, install Nim 2.0 or later and run
+Pin a release with `NIMLET_VERSION=v0.1.0` before the curl command, or override
+the install location with `NIMLET_INSTALL_DIR` / `NIMLET_BIN_DIR`.
+
+### From source
+
+To build from a source checkout, install Nim 2.0 or later and run
 `nimble release`, which writes `build/nimlet`.
 
 ## Configure provider access

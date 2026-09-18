@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "cp ../scripts/install.sh public/install.sh",
+    "prebuild": "cp ../scripts/install.sh public/install.sh",
     "dev": "astro dev",
     "start": "astro dev",
     "build": "astro build",

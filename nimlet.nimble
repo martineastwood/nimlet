@@ -21,5 +21,8 @@ task release, "Build release binary":
     exec "mkdir -p build"
   exec "nim c -d:release --threads:on --mm:orc -o:build/nimlet src/nimlet.nim"
 
+task packageMacos, "Build self-contained macOS tarball with bundled OpenSSL and PCRE":
+  exec "scripts/package-macos.sh"
+
 task idleSmoke, "Idle CPU/wakeup smoke (IDLE_SECS=60 by default)":
   exec "scripts/idle_smoke.sh"

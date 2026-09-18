@@ -1,6 +1,7 @@
 nimlet
 nimterm_preview
 build/
+dist/
 nimcache/
 tests/all_tests
 *.dSYM/

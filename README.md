@@ -28,12 +28,11 @@ UI. There is no language runtime to install and no hosted service in the path.
 ### Install on macOS
 
 ```sh
-brew tap martineastwood/nimlet https://github.com/martineastwood/nimlet
-brew install nimlet
+curl -fsSL https://nimlet.niminal.dev/install.sh | sh
 ```
 
-The formula builds from source and depends on Homebrew OpenSSL and PCRE. Ripgrep
-is installed by default so workspace search stays fast.
+That downloads the latest release tarball (binary plus bundled OpenSSL and PCRE)
+into `~/.local/lib/nimlet` and links `~/.local/bin/nimlet`.
 
 ### Run
 
