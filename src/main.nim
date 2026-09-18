@@ -164,6 +164,14 @@ proc mergePipedPrompt*(prompt, piped: string): string =
   if prompt.len == 0: return input
   input & "\n\n" & prompt
 
+proc readPipedStdin*(): string =
+  ## Pane managers (e.g. herdr) may hand us a non-TTY stdin that is
+  ## non-blocking or closed. Read what we can; never crash on it.
+  try:
+    stdin.readAll()
+  except IOError:
+    ""
+
 proc printMode*(cli: CliArgs, stdinIsTty: bool): bool =
   cli.print or cli.mode == "json" or not stdinIsTty
 
@@ -341,7 +349,7 @@ proc runMain*() =
   let isRpcMode = cli.mode == "rpc"
   let isPrintMode = not isRpcMode and cli.printMode(stdinIsTty)
   let prompt = if isRpcMode or stdinIsTty: cli.prompt
-               else: mergePipedPrompt(cli.prompt, stdin.readAll())
+               else: mergePipedPrompt(cli.prompt, readPipedStdin())
   if isRpcMode and prompt.len > 0:
     stderr.writeLine "RPC mode accepts commands on stdin, not a CLI prompt."
     quit(2)
@@ -353,7 +361,8 @@ proc runMain*() =
   if projectTrust.required and projectTrust.prompt and not isPrintMode and
       not isRpcMode and stdinIsTty:
     printTrustPrompt(projectTrust.resources)
-    let answer = stdin.readLine().strip.toLowerAscii
+    let answer = try: stdin.readLine().strip.toLowerAscii
+                 except IOError: ""
     projectTrust.trusted = answer in ["y", "yes"]
     saveProjectTrust(projectTrust.workspace, projectTrust.trusted)
   setProjectResourcesTrusted(projectTrust.workspace, projectTrust.trusted)
