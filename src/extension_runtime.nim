@@ -254,6 +254,14 @@ proc extensionLaunch(command: seq[string], dir: string):
         let interpreter = ShellSpec(kind: shellCmd, executable: cmd)
         let script = interpreter.commandInvocation(result.executable, result.args)
         return (interpreter.executable, @["/d", "/s", "/c", script])
+    elif suffix.endsWith(".py"):
+      ## The official `py` launcher ships with python.org installs; `python`
+      ## covers everything else. Prefer `py` to avoid Microsoft Store aliases.
+      var python = findExe("py")
+      if python.len == 0:
+        python = findExe("python")
+      if python.len > 0:
+        return (python, @[result.executable] & result.args)
 
 proc readHandleLine(handle: FileHandle): string {.gcsafe.} =
   var ch: char

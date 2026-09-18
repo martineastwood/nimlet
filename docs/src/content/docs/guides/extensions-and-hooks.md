@@ -52,10 +52,9 @@ The project roots are only searched when you have trusted the project.
 The process starts with your workspace as its working directory.
 
 On POSIX, make scripts executable with a shebang and use `"command": ["./extension.py"]`.
-On Windows, use a `.cmd` wrapper or pass a workspace-relative path to an
-interpreter, for example `["python", ".nimlet/extensions/notes/extension.py"]`.
-`.sh`, `.ps1`, `.cmd`, and `.bat` files are launched through the matching
-interpreter.
+On Windows, `.sh`, `.ps1`, `.cmd`, `.bat`, and `.py` files are launched through the
+matching interpreter (`py` or `python` for `.py`), so the same manifest works on both
+platforms.
 
 A manifest that does not parse, or is missing `name` or `command`, is skipped
 with a startup warning such as `skipping /path: missing name`. Nothing crashes.
