@@ -758,6 +758,8 @@ proc applySlash(agent: ptr Agent, cmd: SlashCommand,
     ui.onChange()
   of slHelp:
     ui.emit(mlPlain, renderMarkdown(helpText().strip, currentTheme.colorsOn))
+  of slVersion:
+    ui.emit(mlPlain, "nimlet " & nimletVersion)
   of slStats:
     ui.emit(mlPlain, agent[].statsReport)
   of slDoctor:

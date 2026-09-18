@@ -138,6 +138,7 @@ Details for all three are in [Security](/guides/security/) and
 | --- | --- |
 | `/doctor [test]` | Show configuration and key status; optionally test the connection |
 | `/reload` | Rescan tools, hooks, skills, and prompts |
+| `/version` | Show the running nimlet version |
 | `/quit` | Exit |
 | `/exit` | Exit |
 
@@ -150,6 +151,9 @@ Details for all three are in [Security](/guides/security/) and
   model, and account.
 - `/reload` re-reads skills, prompts, `AGENTS.md`, external tools, and extensions,
   and keeps the current session.
+- `/version` prints the version of the nimlet you are running, such as
+  `nimlet 0.1.0`. The same string is available from the command line with
+  `nimlet --version`.
 - `/quit` and `/exit` leave. `Ctrl+C` on an empty composer does the same.
 
 ## Dispatch: which command wins

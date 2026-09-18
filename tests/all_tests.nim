@@ -2091,6 +2091,16 @@ suite "slash commands":
     check commandSuggestions("/login d") == @["/login device"]
     check commandSuggestions("/login b") == @["/login browser"]
 
+  test "version reports the running version":
+    var output = ""
+    var ui = consoleSink()
+    ui.emit = proc (level: MsgLevel, value: string) = output.add value
+    var agent = Agent(config: AgentConfig())
+    check parseSlash("/version").kind == slVersion
+    check "takes no arguments" in commandError("/version now")
+    check agent.processInput("/version", ui)
+    check "nimlet " & nimletVersion in output
+
   test "suggests commands and validates arguments":
     check "/model [name]" in commandSuggestions("/mo")
     check "/models refresh" in commandSuggestions("/mo")
@@ -2109,6 +2119,7 @@ suite "slash commands":
     check parseSlash("/export").kind == slExport
     check parseSlash("/export transcript copy.html").arg == "transcript copy.html"
     check parseSlash("/help").kind == slHelp
+    check "/version" in commandSuggestions("/ver")
     check parseSlash("/provider").kind == slProvider
     check parseSlash("/provider").arg.len == 0
     check parseSlash("/provider hyper").kind == slProvider

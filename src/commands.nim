@@ -22,6 +22,7 @@ type
     slPrompt
     slExtension
     slHelp
+    slVersion
     slPlan
     slAct
     slYolo
@@ -89,6 +90,8 @@ const CommandSpecs* = [
     description: "show Codex authentication status"),
   CommandSpec(kind: slHelp, name: "/help", usage: "/help",
     description: "show this help"),
+  CommandSpec(kind: slVersion, name: "/version", usage: "/version",
+    description: "show the running nimlet version"),
   CommandSpec(kind: slModel, name: "/model", usage: "/model [name]",
     description: "show or set the model"),
   CommandSpec(kind: slModelsRefresh, name: "/models", usage: "/models refresh",
@@ -155,7 +158,7 @@ proc helpText*(): string =
     @[slSession, slStats, slNew, slResume, slFork, slCopy, slExport, slName, slCompact],
     @[slYolo, slTrust, slPermissions],
     @[slTheme, slSettings],
-    @[slDoctor, slReload, slQuit],
+    @[slDoctor, slReload, slVersion, slQuit],
   ]
   for i in 0 ..< groups.len:
     result.add "## " & groups[i] & "\n\n"
@@ -274,7 +277,7 @@ proc parseSlash*(input: string, workspace = getCurrentDir()): SlashCommand =
   of slDoctor:
     if parts.len > 2 or (parts.len == 2 and parts[1] != "test"):
       return fail("Usage: /doctor [test]")
-  of slHelp, slPlan, slAct, slStats, slNew, slCopy, slSettings,
+  of slHelp, slVersion, slPlan, slAct, slStats, slNew, slCopy, slSettings,
      slLogout, slAuth, slQuit, slReload:
     if parts.len > 1:
       return fail(command & " takes no arguments")
