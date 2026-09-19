@@ -34,6 +34,7 @@ need sha256sum
 need patchelf
 need readelf
 need ldd
+need strip
 
 MULTIARCH="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || true)"
 LIB_DIRS=(
@@ -132,6 +133,7 @@ nimble setup -y
 
 echo "==> compiling nimlet (OpenSSL + PCRE linked, rpath \$ORIGIN)"
 nim c -d:release --threads:on --mm:orc --hints:off \
+  --dynlibOverride:ssl \
   --dynlibOverride:pcre \
   --passL:"-L${SSL_DIR}" \
   --passL:"-lssl" \
@@ -147,6 +149,7 @@ cp -f "$SSL_SO" "$STAGE_DIR/$SSL_NAME"
 cp -f "$CRYPTO_SO" "$STAGE_DIR/$CRYPTO_NAME"
 cp -f "$PCRE_SO" "$STAGE_DIR/$PCRE_NAME"
 chmod +x "$STAGE_DIR/nimlet"
+strip --strip-unneeded "$STAGE_DIR/nimlet"
 
 # Keep SONAME filenames; ensure the binary looks next to itself.
 patchelf --set-rpath '$ORIGIN' "$STAGE_DIR/nimlet"

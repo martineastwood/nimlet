@@ -114,9 +114,20 @@ publish a ${os} release tarball first, or set NIMLET_VERSION to an existing tag"
     chmod +x "${INSTALL_ROOT}/rg"
   fi
 
-  ln -sfn "${INSTALL_ROOT}/nimlet" "${BIN_DIR}/nimlet"
+  # Use wrappers instead of symlinks. On Linux, $ORIGIN rpath follows the
+  # path used to exec the binary; a symlink from ~/.local/bin would make
+  # bundled libs unresolvable.
+  cat > "${BIN_DIR}/nimlet" <<EOF
+#!/bin/sh
+exec "${INSTALL_ROOT}/nimlet" "\$@"
+EOF
+  chmod +x "${BIN_DIR}/nimlet"
   if [ -x "${INSTALL_ROOT}/rg" ]; then
-    ln -sfn "${INSTALL_ROOT}/rg" "${BIN_DIR}/rg"
+    cat > "${BIN_DIR}/rg" <<EOF
+#!/bin/sh
+exec "${INSTALL_ROOT}/rg" "\$@"
+EOF
+    chmod +x "${BIN_DIR}/rg"
   fi
 
   log "installed nimlet to ${INSTALL_ROOT}"

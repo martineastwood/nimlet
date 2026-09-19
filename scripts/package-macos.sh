@@ -27,6 +27,7 @@ need install_name_tool
 need tar
 need shasum
 need codesign
+need strip
 
 OPENSSL_PREFIX="$(brew --prefix openssl@3)"
 PCRE_PREFIX="$(brew --prefix pcre)"
@@ -93,6 +94,7 @@ nimble setup -y
 echo "==> compiling nimlet (OpenSSL + PCRE linked)"
 export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 nim c -d:release --threads:on --mm:orc --hints:off \
+  --dynlibOverride:ssl \
   --dynlibOverride:pcre \
   --passL:"-L${OPENSSL_PREFIX}/lib" \
   --passL:"-lssl" \
@@ -107,6 +109,7 @@ cp -f "$OPENSSL_PREFIX/lib/libssl.3.dylib" "$STAGE_DIR/"
 cp -f "$OPENSSL_PREFIX/lib/libcrypto.3.dylib" "$STAGE_DIR/"
 cp -f "$PCRE_PREFIX/lib/libpcre.1.dylib" "$STAGE_DIR/"
 chmod +x "$STAGE_DIR/nimlet"
+strip -x "$STAGE_DIR/nimlet"
 
 # Optional: include Homebrew ripgrep when available (skip IDE-bundled copies).
 RG_BIN=""
