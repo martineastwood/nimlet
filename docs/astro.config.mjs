@@ -20,6 +20,7 @@ export default defineConfig({
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/martineastwood/nimlet' }],
 			sidebar: [
 				{ label: 'Overview', slug: 'index' },
+				{ label: 'Install', slug: 'guides/install' },
 				{ label: 'Quickstart', slug: 'guides/quickstart' },
 				{ label: 'Configuration', slug: 'guides/configuration' },
 				{ label: 'Interactive TUI', slug: 'guides/interactive-tui' },

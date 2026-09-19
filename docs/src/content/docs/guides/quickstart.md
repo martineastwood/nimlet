@@ -4,29 +4,9 @@ description: Set an API key and run your first turn with nimlet.
 ---
 
 This guide assumes the `nimlet` binary is already installed and available on
-your `PATH`. Give it a provider credential, then run it from the workspace you
-want the agent to inspect or change. No language toolchain or source checkout is
-required to use nimlet.
-
-## Install
-
-Download the latest release tarball (binary plus bundled OpenSSL and PCRE) on
-macOS or Linux:
-
-```sh
-curl -fsSL https://nimlet.niminal.dev/install.sh | sh
-```
-
-The installer puts nimlet under `~/.local/lib/nimlet` and links `~/.local/bin/nimlet`.
-Add `~/.local/bin` to your `PATH` if it is not already there.
-
-Pin a release with `NIMLET_VERSION=v0.1.1` before the curl command, or override
-the install location with `NIMLET_INSTALL_DIR` / `NIMLET_BIN_DIR`.
-
-### From source
-
-To build from a source checkout, install Nim 2.0 or later and run
-`nimble release`, which writes `build/nimlet`.
+your `PATH`. If it is not, follow [Install](/guides/install/) first. Give it a
+provider credential, then run it from the workspace you want the agent to inspect
+or change.
 
 ## Configure provider access
 

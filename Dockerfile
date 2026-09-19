@@ -1,5 +1,5 @@
-# Clean Linux image for smoke-testing the curl installer.
-# No Nim toolchain: only what a typical user needs to download and run nimlet.
+# Clean Linux image for installing and dogfooding nimlet.
+# No Nim toolchain: only curl + CA certs to fetch the release installer.
 
 FROM debian:bookworm-slim
 
@@ -10,8 +10,9 @@ RUN apt-get update \
 ENV HOME=/tmp/home \
     PATH=/tmp/home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-WORKDIR /tmp
+WORKDIR /workspace
 
-# Install from GitHub Releases via the published installer, then print the version.
+# Install from GitHub Releases, then drop into an interactive shell.
+# Use bash -c (not -lc): a login shell resets PATH and drops ~/.local/bin.
 # Pin with NIMLET_VERSION=v0.1.1 (or leave unset for latest).
-CMD ["bash", "-lc", "curl -fsSL https://nimlet.niminal.dev/install.sh | sh && nimlet --version"]
+CMD ["bash", "-c", "curl -fsSL https://nimlet.niminal.dev/install.sh | sh && exec bash"]

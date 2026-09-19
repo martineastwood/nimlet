@@ -3,12 +3,19 @@ services:
     build: .
     image: nimlet:install-smoke
     container_name: nimlet-install
-    # Optional pin, e.g. NIMLET_VERSION=v0.1.1 docker compose run --rm nimlet
+    # Native arch (linux/arm64 on Apple Silicon, linux/amd64 on Intel).
+    # Matches the matching nimlet-linux-* release tarball.
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
     environment:
       - NIMLET_VERSION
       - OPENROUTER_API_KEY
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
       - HYPER_API_KEY
-    # One-shot: install + --version, then exit. Rebuild if Dockerfile changed:
-    #   docker compose build --no-cache && docker compose run --rm nimlet
+      - HOME=/tmp/home
+    stdin_open: true
+    tty: true
+    # Install + interactive shell. Use:
+    #   docker compose run --rm nimlet

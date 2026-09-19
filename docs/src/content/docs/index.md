@@ -6,9 +6,13 @@ hero:
   title: Nimlet Coding Agent
   tagline: Fast to start, light on memory, no CPU until you ask.
   actions:
-    - text: Get started
-      link: /guides/quickstart/
+    - text: Install
+      link: /guides/install/
       variant: primary
+      icon: right-arrow
+    - text: Quickstart
+      link: /guides/quickstart/
+      variant: secondary
       icon: right-arrow
     - text: View on GitHub
       link: https://github.com/martineastwood/nimlet
@@ -164,7 +168,7 @@ send({
     <div>
       <p class="landing-kicker">Start in a few lines</p>
       <h2 id="landing-start-title">Bring your provider. Keep your project.</h2>
-      <p>Install the release binary on macOS or Linux, set a provider key, and launch nimlet from the workspace you want to work on.</p>
+      <p>Install the release binary on macOS, Linux, or Windows through WSL, set a provider key, and launch nimlet from the workspace you want to work on.</p>
     </div>
     <pre><code><span class="landing-prompt">$</span> curl -fsSL https://nimlet.niminal.dev/install.sh | sh
 <span class="landing-prompt">$</span> export OPENROUTER_API_KEY=your-key
@@ -172,5 +176,5 @@ send({
 <span class="landing-prompt">$</span> nimlet</code></pre>
   </section>
 
-  <p class="landing-footer-link"><a href="/guides/quickstart/">Read the quickstart</a> or <a href="https://github.com/martineastwood/nimlet">view nimlet on GitHub</a>.</p>
+  <p class="landing-footer-link"><a href="/guides/install/">Install nimlet</a>, <a href="/guides/quickstart/">read the quickstart</a>, or <a href="https://github.com/martineastwood/nimlet">view nimlet on GitHub</a>.</p>
 </div>
