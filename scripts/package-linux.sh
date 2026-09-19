@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a self-contained Linux nimlet tarball with bundled OpenSSL + PCRE.
-# Intended for Linux CI (ubuntu-latest). Test the result locally with:
+# Intended for Linux CI on Ubuntu 22.04 (glibc 2.35 baseline). Test with:
 #   ./scripts/test-linux-install.sh dist/nimlet-linux-x86_64.tar.gz
 set -euo pipefail
 
@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "package-linux.sh must run on Linux (GitHub Actions ubuntu-latest)" >&2
+  echo "package-linux.sh must run on Linux (GitHub Actions ubuntu-22.04)" >&2
   echo "after CI builds the artifact, test it with: ./scripts/test-linux-install.sh" >&2
   exit 1
 fi

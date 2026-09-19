@@ -28,10 +28,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Build on 22.04 so bundled OpenSSL/PCRE stay within glibc 2.35.
+          # ubuntu-latest (24.04) ships libs that need GLIBC_2.38+, which
+          # breaks Debian bookworm and other still-common hosts.
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
