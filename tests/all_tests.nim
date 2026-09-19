@@ -4910,7 +4910,7 @@ suite "cli prompt args":
     check parseCliArgs(["-h"]).help
     ## Anything after them is ignored rather than treated as a prompt.
     check parseCliArgs(["--version", "ignored"]).prompt.len == 0
-    check nimletVersion == "0.1.0"
+    check nimletVersion == "0.1.1"
 
   test "fullscreen mode is selectable at startup":
     check parseCliArgs([]).fullscreen

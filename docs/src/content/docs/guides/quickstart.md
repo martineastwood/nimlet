@@ -20,7 +20,7 @@ curl -fsSL https://nimlet.niminal.dev/install.sh | sh
 The installer puts nimlet under `~/.local/lib/nimlet` and links `~/.local/bin/nimlet`.
 Add `~/.local/bin` to your `PATH` if it is not already there.
 
-Pin a release with `NIMLET_VERSION=v0.1.0` before the curl command, or override
+Pin a release with `NIMLET_VERSION=v0.1.1` before the curl command, or override
 the install location with `NIMLET_INSTALL_DIR` / `NIMLET_BIN_DIR`.
 
 ### From source

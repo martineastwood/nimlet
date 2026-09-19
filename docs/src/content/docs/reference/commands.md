@@ -152,7 +152,7 @@ Details for all three are in [Security](/guides/security/) and
 - `/reload` re-reads skills, prompts, `AGENTS.md`, external tools, and extensions,
   and keeps the current session.
 - `/version` prints the version of the nimlet you are running, such as
-  `nimlet 0.1.0`. The same string is available from the command line with
+  `nimlet 0.1.1`. The same string is available from the command line with
   `nimlet --version`.
 - `/quit` and `/exit` leave. `Ctrl+C` on an empty composer does the same.
 

@@ -14,7 +14,7 @@ import models_dev, compaction
 import trust
 
 const
-  nimletVersion* = "0.1.0"
+  nimletVersion* = "0.1.1"
   ## The Gemini API key is exported under any of these names. nimlet accepts
   ## them all, preferring the first, so an existing key just works.
   googleApiKeyEnvs* = ["GEMINI_API_KEY", "GOOGLE_API_KEY",
