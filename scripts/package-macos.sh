@@ -77,9 +77,18 @@ mkdir -p "$NIMBLE_DIR"
 # cut to match nimlet.
 DEP_TAG="${NIMLET_DEP_TAG:-head}"
 echo "==> resolving Nimble dependencies (@#${DEP_TAG})"
-nimble install "nimgent@#${DEP_TAG}" -y
-nimble install "nimterm@#${DEP_TAG}" -y
-nimble install "nimwire@#${DEP_TAG}" -y
+# Install from a throwaway directory so nimble does not try to compile this
+# package while dependencies are still incomplete (that produced a noisy
+# "Build failed for the package: nimlet" against an older nimterm API).
+dep_tmp="$(mktemp -d)"
+(
+  cd "$dep_tmp"
+  # nimterm first: current nimlet needs its newer API (e.g. newQuestion secret=).
+  nimble install "nimterm@#${DEP_TAG}" -y
+  nimble install "nimgent@#${DEP_TAG}" -y
+  nimble install "nimwire@#${DEP_TAG}" -y
+)
+rm -rf "$dep_tmp"
 nimble setup -y
 echo "==> compiling nimlet (OpenSSL + PCRE linked)"
 export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
