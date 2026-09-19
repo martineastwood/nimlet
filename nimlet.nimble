@@ -24,5 +24,8 @@ task release, "Build release binary":
 task packageMacos, "Build self-contained macOS tarball with bundled OpenSSL and PCRE":
   exec "scripts/package-macos.sh"
 
+task packageLinux, "Build self-contained Linux tarball (run on Linux / CI)":
+  exec "scripts/package-linux.sh"
+
 task idleSmoke, "Idle CPU/wakeup smoke (IDLE_SECS=60 by default)":
   exec "scripts/idle_smoke.sh"

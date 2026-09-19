@@ -8,9 +8,10 @@ your `PATH`. Give it a provider credential, then run it from the workspace you
 want the agent to inspect or change. No language toolchain or source checkout is
 required to use nimlet.
 
-## Install on macOS
+## Install
 
-Download the latest release tarball (binary plus bundled OpenSSL and PCRE):
+Download the latest release tarball (binary plus bundled OpenSSL and PCRE) on
+macOS or Linux:
 
 ```sh
 curl -fsSL https://nimlet.niminal.dev/install.sh | sh

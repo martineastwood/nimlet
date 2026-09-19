@@ -25,14 +25,14 @@ UI. There is no language runtime to install and no hosted service in the path.
 
 ## Quickstart
 
-### Install on macOS
+### Install
 
 ```sh
 curl -fsSL https://nimlet.niminal.dev/install.sh | sh
 ```
 
-That downloads the latest release tarball (binary plus bundled OpenSSL and PCRE)
-into `~/.local/lib/nimlet` and links `~/.local/bin/nimlet`.
+That downloads the latest macOS or Linux release tarball (binary plus bundled
+OpenSSL and PCRE) into `~/.local/lib/nimlet` and links `~/.local/bin/nimlet`.
 
 ### Run
 

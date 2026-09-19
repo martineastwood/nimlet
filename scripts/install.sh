@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the latest macOS nimlet release tarball from GitHub.
+# Install the latest nimlet release tarball from GitHub (macOS or Linux).
 set -eu
 
 REPO="${NIMLET_REPO:-martineastwood/nimlet}"
@@ -24,8 +24,9 @@ main() {
 
   OS="$(uname -s)"
   case "$OS" in
-    Darwin) ;;
-    *) err "this installer currently supports macOS only (got $OS)" ;;
+    Darwin) os="macos" ;;
+    Linux) os="linux" ;;
+    *) err "this installer supports macOS and Linux only (got $OS)" ;;
   esac
 
   ARCH="$(uname -m)"
@@ -35,8 +36,8 @@ main() {
     *) err "unsupported architecture: $ARCH" ;;
   esac
 
-  asset="nimlet-macos-${arch}.tar.gz"
-  log "detected macos/${arch}"
+  asset="nimlet-${os}-${arch}.tar.gz"
+  log "detected ${os}/${arch}"
 
   need curl
   need tar
@@ -76,7 +77,7 @@ main() {
 
   if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "$url" -o "${tmp}/${asset}"; then
     err "download failed from ${url}
-publish a macOS release tarball first, or set NIMLET_VERSION to an existing tag"
+publish a ${os} release tarball first, or set NIMLET_VERSION to an existing tag"
   fi
   if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 "$sum_url" -o "${tmp}/${asset}.sha256"; then
     err "checksum download failed from ${sum_url}"
@@ -100,9 +101,9 @@ publish a macOS release tarball first, or set NIMLET_VERSION to an existing tag"
   fi
 
   tar -xzf "${tmp}/${asset}" -C "$tmp"
-  payload="${tmp}/nimlet-macos-${arch}"
+  payload="${tmp}/nimlet-${os}-${arch}"
   if [ ! -x "${payload}/nimlet" ]; then
-    err "archive did not contain nimlet-macos-${arch}/nimlet"
+    err "archive did not contain nimlet-${os}-${arch}/nimlet"
   fi
 
   rm -rf "$INSTALL_ROOT"
