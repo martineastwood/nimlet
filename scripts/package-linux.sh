@@ -134,6 +134,7 @@ nimble setup -y
 echo "==> compiling nimlet (OpenSSL + PCRE linked, rpath \$ORIGIN)"
 nim c -d:release --threads:on --mm:orc --hints:off \
   --dynlibOverride:ssl \
+  --dynlibOverride:crypto \
   --dynlibOverride:pcre \
   --passL:"-L${SSL_DIR}" \
   --passL:"-lssl" \

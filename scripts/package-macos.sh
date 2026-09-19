@@ -95,6 +95,7 @@ echo "==> compiling nimlet (OpenSSL + PCRE linked)"
 export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 nim c -d:release --threads:on --mm:orc --hints:off \
   --dynlibOverride:ssl \
+  --dynlibOverride:crypto \
   --dynlibOverride:pcre \
   --passL:"-L${OPENSSL_PREFIX}/lib" \
   --passL:"-lssl" \

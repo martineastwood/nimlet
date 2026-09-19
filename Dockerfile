@@ -1,22 +1,17 @@
-# Build, test, and run nimlet in a Linux container.
-#
-# Usually you won't use this image directly: `docker compose up`
-# builds it, mounts the repo at /workspace, and keeps the container
-# running so you can exec a shell. The compiler, nimble, git and
-# python3 (needed by the test suite's fixture servers) live in this
-# image; your repo and its edits stay mounted on top of it.
+# Clean Linux image for smoke-testing the curl installer.
+# No Nim toolchain: only what a typical user needs to download and run nimlet.
 
-FROM nimlang/nim:2.0.14
+FROM debian:bookworm-slim
 
-# Debian 12 (the image's base). Needed by the test suite, which spawns
-# python3 HTTP fixture servers.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
-# The repo (and $HOME) are not baked in: docker compose mounts the repo
-# at /workspace. `$HOME` is kept on a throwaway path so project and user
-# config/sessions never clash with the mounted repository contents.
-WORKDIR /workspace
+ENV HOME=/tmp/home \
+    PATH=/tmp/home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-CMD ["nimble", "build"]
+WORKDIR /tmp
+
+# Install from GitHub Releases via the published installer, then print the version.
+# Pin with NIMLET_VERSION=v0.1.1 (or leave unset for latest).
+CMD ["bash", "-lc", "curl -fsSL https://nimlet.niminal.dev/install.sh | sh && nimlet --version"]

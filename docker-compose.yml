@@ -1,27 +1,14 @@
 services:
   nimlet:
     build: .
-    image: nimlet:dev
-    container_name: nimlet
-    # The repo is mounted read-write so code edits are picked up by
-    # rebuilds/tests, and so sessions/config written by nimlet persist
-    # on the host. The container starts in the workspace root.
-    # Sibling packages are mounted at /nimgent and /nimterm so the relative
-    # --path entries in nim.cfg resolve correctly from /workspace.
-    working_dir: /workspace
-    volumes:
-      - .:/workspace
-      - ../nimgent:/nimgent
-      - ../nimterm:/nimterm
-    # Any host env var listed here is passed into the container, so e.g.
-    #   OPENROUTER_API_KEY=... docker compose up
-    # just works. Uncomment or add more variables as needed.
+    image: nimlet:install-smoke
+    container_name: nimlet-install
+    # Optional pin, e.g. NIMLET_VERSION=v0.1.1 docker compose run --rm nimlet
     environment:
+      - NIMLET_VERSION
       - OPENROUTER_API_KEY
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
       - HYPER_API_KEY
-      - HOME=/workspace-volatile
-    # Idle so `docker compose up` stays Up. Shell in with:
-    #   docker compose exec nimlet bash
-    command: ["sleep", "infinity"]
+    # One-shot: install + --version, then exit. Rebuild if Dockerfile changed:
+    #   docker compose build --no-cache && docker compose run --rm nimlet
